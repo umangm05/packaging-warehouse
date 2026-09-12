@@ -37,7 +37,7 @@ export function computeLayout(L: number, W: number, H: number): BoxLayout {
   const T = H;
 
   const bandW = 2 * (U + V);
-  const bandH = T;
+  const bandH = T + 2 * W;
   const kraftCol = Math.max(24, 0.05 * bandW);
 
   const totalW = bandW + kraftCol;
@@ -51,25 +51,27 @@ export function computeLayout(L: number, W: number, H: number): BoxLayout {
 
   const U_px = U * scale;
   const V_px = V * scale;
-  const bandH_px = bandH * scale;
+  const T_px = T * scale;
+  const W_px = W * scale;
 
-  let x = 0;
-  const rFront = { x0: nx(x), y0: ny(0), x1: nx(x + U_px), y1: ny(bandH_px) };
-  x += U_px;
-  const rRight = { x0: nx(x), y0: ny(0), x1: nx(x + V_px), y1: ny(bandH_px) };
-  x += V_px;
-  const rBack = { x0: nx(x), y0: ny(0), x1: nx(x + U_px), y1: ny(bandH_px) };
-  x += U_px;
-  const rLeft = { x0: nx(x), y0: ny(0), x1: nx(x + V_px), y1: ny(bandH_px) };
-  x += V_px;
+  // Top (+Y, face 2) and Bottom (-Y, face 3) are L x W panels placed
+  // above and below the 4-panel band so all 6 faces map independently.
+  const rTop = { x0: nx(0), y0: ny(0), x1: nx(U_px), y1: ny(W_px) };
 
-  const kraftX0 = nx(x);
+  const bandY0 = W_px;
+  const bandY1 = W_px + T_px;
+  const rFront = { x0: nx(0), y0: ny(bandY0), x1: nx(U_px), y1: ny(bandY1) };
+  const rRight = { x0: nx(U_px), y0: ny(bandY0), x1: nx(U_px + V_px), y1: ny(bandY1) };
+  const rBack = { x0: nx(U_px + V_px), y0: ny(bandY0), x1: nx(2 * U_px + V_px), y1: ny(bandY1) };
+  const rLeft = { x0: nx(2 * U_px + V_px), y0: ny(bandY0), x1: nx(2 * U_px + 2 * V_px), y1: ny(bandY1) };
+
+  const rBottom = { x0: nx(0), y0: ny(bandY1), x1: nx(U_px), y1: ny(bandY1 + W_px) };
 
   const faces: FaceRect[] = [
     { ...rRight, flipU: 1, flipV: 1 },
     { ...rLeft, flipU: 1, flipV: 1 },
-    { x0: kraftX0, y0: 0, x1: 1, y1: 1, flipU: 1, flipV: 1 },
-    { x0: kraftX0, y0: 0, x1: 1, y1: 1, flipU: 1, flipV: 1 },
+    { ...rTop, flipU: 1, flipV: 1 },
+    { ...rBottom, flipU: 1, flipV: 1 },
     { ...rFront, flipU: 1, flipV: 1 },
     { ...rBack, flipU: 1, flipV: 1 },
   ];
