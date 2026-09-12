@@ -3,10 +3,14 @@
 import { useDesignerStore } from "@/store/designer";
 import { formatUnit, UNIT_OPTIONS } from "@/lib/units";
 
-/**
- * Top toolbar: zoom controls, unit selector, DPI readout, fit-to-view.
- * S1 ships the shell; S2+ will add tool buttons (select, rect, text, image).
- */
+const TOOLS = [
+  { id: "select", label: "Select", shortcut: "V" },
+  { id: "rect", label: "Rectangle", shortcut: "R" },
+  { id: "ellipse", label: "Ellipse", shortcut: "O" },
+  { id: "line", label: "Line", shortcut: "L" },
+  { id: "polygon", label: "Polygon", shortcut: "P" },
+] as const;
+
 export function DesignerToolbar() {
   const zoom = useDesignerStore((s) => s.zoom);
   const setZoom = useDesignerStore((s) => s.setZoom);
@@ -17,6 +21,12 @@ export function DesignerToolbar() {
   const setDpi = useDesignerStore((s) => s.setDpi);
   const widthMm = useDesignerStore((s) => s.widthMm);
   const heightMm = useDesignerStore((s) => s.heightMm);
+  const activeTool = useDesignerStore((s) => s.activeTool);
+  const setActiveTool = useDesignerStore((s) => s.setActiveTool);
+  const undo = useDesignerStore((s) => s.undo);
+  const redo = useDesignerStore((s) => s.redo);
+  const canUndo = useDesignerStore((s) => s.history.length > 0);
+  const canRedo = useDesignerStore((s) => s.redoStack.length > 0);
 
   const zoomPct = zoom === "fit" ? "fit" : `${Math.round(zoom * 100)}%`;
 
@@ -32,6 +42,44 @@ export function DesignerToolbar() {
       </div>
 
       <div className="flex items-center gap-2">
+        {/* Tool buttons */}
+        <div className="flex items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-1 py-0.5">
+          {TOOLS.map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setActiveTool(t.id as any)}
+              className={`rounded px-2 py-0.5 text-xs ${
+                activeTool === t.id
+                  ? "bg-amber-500 text-neutral-900"
+                  : "text-neutral-300 hover:bg-neutral-700"
+              }`}
+              title={`${t.label} (${t.shortcut})`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Undo / Redo */}
+        <div className="flex items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-1 py-0.5">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            className="rounded px-1.5 py-0.5 text-xs text-neutral-300 hover:bg-neutral-700 disabled:opacity-40"
+            title="Undo (Ctrl+Z)"
+          >
+            ↶
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            className="rounded px-1.5 py-0.5 text-xs text-neutral-300 hover:bg-neutral-700 disabled:opacity-40"
+            title="Redo (Ctrl+Y)"
+          >
+            ↷
+          </button>
+        </div>
+
         {/* Zoom controls */}
         <div className="flex items-center gap-1 rounded-md border border-neutral-700 bg-neutral-800 px-1 py-0.5">
           <button

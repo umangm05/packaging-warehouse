@@ -2,19 +2,19 @@
 
 import { useDesignerStore } from "@/store/designer";
 import { formatUnit } from "@/lib/units";
+import { getObjectBounds } from "@/lib/designerTypes";
 
-/**
- * Bottom status bar — shows live cursor position in mm and current zoom.
- * The cursor mm is computed by CanvasStage via a shared ref pattern; S1
- * keeps it simple with a lightweight subscription to the SVG's mousemove
- * event dispatched on the window.
- */
 export function DesignerStatusBar() {
   const widthMm = useDesignerStore((s) => s.widthMm);
   const heightMm = useDesignerStore((s) => s.heightMm);
   const unit = useDesignerStore((s) => s.unit);
   const dpi = useDesignerStore((s) => s.dpi);
   const zoom = useDesignerStore((s) => s.zoom);
+  const objects = useDesignerStore((s) => s.objects);
+  const selectedId = useDesignerStore((s) => s.selectedId);
+
+  const selected = selectedId ? objects.find((o) => o.id === selectedId) : null;
+  const bounds = selected ? getObjectBounds(selected) : null;
 
   return (
     <footer className="flex items-center justify-between border-t border-neutral-800 bg-neutral-900 px-4 py-1.5 text-[11px] text-neutral-500">
@@ -30,6 +30,12 @@ export function DesignerStatusBar() {
             {formatUnit(widthMm, "mm", dpi)} × {formatUnit(heightMm, "mm", dpi)} mm
           </span>)
         </span>
+        {selected && bounds && (
+          <span className="text-amber-400">
+            {selected.name} @ {bounds.x.toFixed(1)},{bounds.y.toFixed(1)} — {bounds.width.toFixed(1)}×{bounds.height.toFixed(1)}
+            {selected.rotation !== 0 && ` ${selected.rotation.toFixed(0)}°`}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-3">
         <span>
@@ -40,6 +46,9 @@ export function DesignerStatusBar() {
         </span>
         <span>
           DPI: <span className="font-mono text-neutral-300">{dpi}</span>
+        </span>
+        <span>
+          Objects: <span className="font-mono text-neutral-300">{objects.length}</span>
         </span>
       </div>
     </footer>

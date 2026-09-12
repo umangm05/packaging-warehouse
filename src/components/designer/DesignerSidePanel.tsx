@@ -2,18 +2,30 @@
 
 import { useDesignerStore } from "@/store/designer";
 import { formatUnit, fromMm, toMm, UNIT_OPTIONS } from "@/lib/units";
+import { type DesignObject, type Fill, getObjectBounds } from "@/lib/designerTypes";
+import { colorToCss, formatColorForMode, parseColor } from "@/lib/colorUtils";
 import { useState } from "react";
 
-/**
- * Side panel: canvas size control, position readout, and a skeleton for
- * future layers/properties panels (S2+).
- */
 export function DesignerSidePanel() {
   const widthMm = useDesignerStore((s) => s.widthMm);
   const heightMm = useDesignerStore((s) => s.heightMm);
   const unit = useDesignerStore((s) => s.unit);
   const dpi = useDesignerStore((s) => s.dpi);
   const setCanvasSize = useDesignerStore((s) => s.setCanvasSize);
+  const background = useDesignerStore((s) => s.background);
+  const setBackground = useDesignerStore((s) => s.setBackground);
+  const objects = useDesignerStore((s) => s.objects);
+  const selectedId = useDesignerStore((s) => s.selectedId);
+  const selectedIds = useDesignerStore((s) => s.selectedIds);
+  const selectObject = useDesignerStore((s) => s.selectObject);
+  const updateObject = useDesignerStore((s) => s.updateObject);
+  const removeObject = useDesignerStore((s) => s.removeObject);
+  const toggleLock = useDesignerStore((s) => s.toggleLock);
+  const toggleVisible = useDesignerStore((s) => s.toggleVisible);
+  const renameObject = useDesignerStore((s) => s.renameObject);
+  const bringForward = useDesignerStore((s) => s.bringForward);
+  const sendBackward = useDesignerStore((s) => s.sendBackward);
+  const moveLayer = useDesignerStore((s) => s.moveLayer);
 
   const [editW, setEditW] = useState("");
   const [editH, setEditH] = useState("");
@@ -33,6 +45,8 @@ export function DesignerSidePanel() {
     }
     setEditing(false);
   };
+
+  const selected = selectedId ? objects.find((o) => o.id === selectedId) : null;
 
   return (
     <aside className="flex w-72 flex-col gap-4 overflow-y-auto border-l border-neutral-800 bg-neutral-900 p-4">
@@ -92,26 +106,180 @@ export function DesignerSidePanel() {
         )}
       </section>
 
+      {/* Background */}
+      <section>
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+          Background
+        </h2>
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2">
+            <label className="w-12 text-xs text-neutral-400">Type</label>
+            <select
+              value={background.type === "solid" ? "solid" : "linear-gradient"}
+              onChange={(e) =>
+                setBackground(
+                  e.target.value === "solid"
+                    ? { type: "solid", color: background.type === "solid" ? background.color : "#ffffff" }
+                    : {
+                        type: "linear-gradient",
+                        angle: 0,
+                        stops: [
+                          { offset: 0, color: "#ffffff" },
+                          { offset: 1, color: "#000000" },
+                        ],
+                      }
+                )
+              }
+              className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+            >
+              <option value="solid">Solid</option>
+              <option value="linear-gradient">Linear Gradient</option>
+            </select>
+          </div>
+          {background.type === "solid" ? (
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-xs text-neutral-400">Color</label>
+              <input
+                type="color"
+                value={background.color}
+                onChange={(e) => setBackground({ type: "solid", color: e.target.value })}
+                className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+              />
+              <input
+                type="text"
+                value={background.color}
+                onChange={(e) => {
+                  const c = parseColor(e.target.value);
+                  if (c) setBackground({ type: "solid", color: c });
+                }}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+              />
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <label className="w-12 text-xs text-neutral-400">Angle</label>
+                <input
+                  type="number"
+                  value={background.angle}
+                  onChange={(e) =>
+                    setBackground({ ...background, angle: Number(e.target.value) })
+                  }
+                  className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+                />
+              </div>
+              {background.stops.map((stop, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <label className="w-12 text-xs text-neutral-400">
+                    Stop {i + 1}
+                  </label>
+                  <input
+                    type="color"
+                    value={stop.color}
+                    onChange={(e) => {
+                      const stops = [...background.stops];
+                      stops[i] = { ...stops[i], color: e.target.value };
+                      setBackground({ ...background, stops });
+                    }}
+                    className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={stop.offset}
+                    onChange={(e) => {
+                      const stops = [...background.stops];
+                      stops[i] = { ...stops[i], offset: Number(e.target.value) };
+                      setBackground({ ...background, stops });
+                    }}
+                    className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
+                  />
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      </section>
+
       {/* Position readout */}
       <PositionReadout />
 
-      {/* Layers skeleton */}
+      {/* Properties panel */}
+      {selected && (
+        <PropertiesPanel obj={selected} updateObject={updateObject} removeObject={removeObject} />
+      )}
+
+      {/* Layers panel */}
       <section>
         <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
           Layers
         </h2>
-        <div className="rounded-md border border-neutral-800 bg-neutral-800/40 p-3 text-[11px] text-neutral-500">
-          No layers yet — shapes, text, and images appear here (S2+).
-        </div>
-      </section>
-
-      {/* Properties skeleton */}
-      <section>
-        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
-          Properties
-        </h2>
-        <div className="rounded-md border border-neutral-800 bg-neutral-800/40 p-3 text-[11px] text-neutral-500">
-          Select an object to edit its properties.
+        <div className="flex flex-col gap-1">
+          {objects.length === 0 ? (
+            <div className="rounded-md border border-neutral-800 bg-neutral-800/40 p-3 text-[11px] text-neutral-500">
+              No layers yet — draw shapes to add them.
+            </div>
+          ) : (
+            objects.map((obj, idx) => (
+              <div
+                key={obj.id}
+                onClick={() => selectObject(obj.id)}
+                className={`flex items-center gap-2 rounded border px-2 py-1 text-xs cursor-pointer ${
+                  selectedIds.includes(obj.id)
+                    ? "border-amber-500/60 bg-amber-500/10 text-amber-200"
+                    : "border-neutral-800 bg-neutral-800/40 text-neutral-300 hover:border-neutral-700"
+                }`}
+              >
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleVisible(obj.id);
+                  }}
+                  className={`text-[10px] ${obj.visible ? "text-neutral-400" : "text-neutral-600"}`}
+                  title={obj.visible ? "Hide" : "Show"}
+                >
+                  {obj.visible ? "👁" : "👁‍🗨"}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    toggleLock(obj.id);
+                  }}
+                  className={`text-[10px] ${obj.locked ? "text-amber-400" : "text-neutral-600"}`}
+                  title={obj.locked ? "Unlock" : "Lock"}
+                >
+                  {obj.locked ? "🔒" : "🔓"}
+                </button>
+                <span className="flex-1 truncate">{obj.name}</span>
+                <div className="flex gap-0.5">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      bringForward(obj.id);
+                    }}
+                    disabled={idx === objects.length - 1}
+                    className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
+                    title="Bring forward"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      sendBackward(obj.id);
+                    }}
+                    disabled={idx === 0}
+                    className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
+                    title="Send backward"
+                  >
+                    ↓
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
         </div>
       </section>
     </aside>
@@ -152,6 +320,217 @@ function PositionReadout() {
             {Math.round(fromMm(widthMm, "px", dpi))} × {Math.round(fromMm(heightMm, "px", dpi))}
           </div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+function PropertiesPanel({
+  obj,
+  updateObject,
+  removeObject,
+}: {
+  obj: DesignObject;
+  updateObject: (id: string, patch: Partial<DesignObject>) => void;
+  removeObject: (id: string) => void;
+}) {
+  const b = getObjectBounds(obj);
+  const [fillMode, setFillMode] = useState<"hex" | "rgb" | "hsl">("hex");
+  const [strokeMode, setStrokeMode] = useState<"hex" | "rgb" | "hsl">("hex");
+
+  return (
+    <section>
+      <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+        Properties
+      </h2>
+      <div className="flex flex-col gap-2 text-xs">
+        {/* Name */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Name</label>
+          <input
+            type="text"
+            value={obj.name}
+            onChange={(e) => updateObject(obj.id, { name: e.target.value } as any)}
+            className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+          />
+        </div>
+
+        {/* Position */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex items-center gap-1">
+            <label className="text-neutral-400">X</label>
+            <input
+              type="number"
+              value={parseFloat(b.x.toFixed(2))}
+              onChange={(e) => updateObject(obj.id, { x: Number(e.target.value) } as any)}
+              className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              step={1}
+            />
+          </div>
+          <div className="flex items-center gap-1">
+            <label className="text-neutral-400">Y</label>
+            <input
+              type="number"
+              value={parseFloat(b.y.toFixed(2))}
+              onChange={(e) => updateObject(obj.id, { y: Number(e.target.value) } as any)}
+              className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              step={1}
+            />
+          </div>
+        </div>
+
+        {/* Size */}
+        {(obj.type === "rect" || obj.type === "image") && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-1">
+              <label className="text-neutral-400">W</label>
+              <input
+                type="number"
+                value={parseFloat(b.width.toFixed(2))}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  if (obj.type === "rect") updateObject(obj.id, { width: val } as any);
+                  else updateObject(obj.id, { width: val } as any);
+                }}
+                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                step={1}
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <label className="text-neutral-400">H</label>
+              <input
+                type="number"
+                value={parseFloat(b.height.toFixed(2))}
+                onChange={(e) => {
+                  const val = Number(e.target.value);
+                  if (obj.type === "rect") updateObject(obj.id, { height: val } as any);
+                  else updateObject(obj.id, { height: val } as any);
+                }}
+                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                step={1}
+              />
+            </div>
+          </div>
+        )}
+
+        {obj.type === "ellipse" && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex items-center gap-1">
+              <label className="text-neutral-400">Rx</label>
+              <input
+                type="number"
+                value={parseFloat(obj.rx.toFixed(2))}
+                onChange={(e) => updateObject(obj.id, { rx: Number(e.target.value) } as any)}
+                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                step={1}
+              />
+            </div>
+            <div className="flex items-center gap-1">
+              <label className="text-neutral-400">Ry</label>
+              <input
+                type="number"
+                value={parseFloat(obj.ry.toFixed(2))}
+                onChange={(e) => updateObject(obj.id, { ry: Number(e.target.value) } as any)}
+                className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                step={1}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Rotation */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Rot</label>
+          <input
+            type="number"
+            value={parseFloat(obj.rotation.toFixed(1))}
+            onChange={(e) => updateObject(obj.id, { rotation: Number(e.target.value) } as any)}
+            className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+            step={5}
+          />
+          <span className="text-neutral-500">°</span>
+        </div>
+
+        {/* Fill */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Fill</label>
+          <input
+            type="color"
+            value={obj.fill.type === "solid" ? obj.fill.color : "#000000"}
+            onChange={(e) =>
+              updateObject(obj.id, {
+                fill: { type: "solid", color: e.target.value },
+              } as any)
+            }
+            className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+          />
+          <input
+            type="text"
+            value={
+              obj.fill.type === "solid"
+                ? formatColorForMode(obj.fill.color, fillMode)
+                : "gradient"
+            }
+            onChange={(e) => {
+              const c = parseColor(e.target.value);
+              if (c) updateObject(obj.id, { fill: { type: "solid", color: c } } as any);
+            }}
+            className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+          />
+          <select
+            value={fillMode}
+            onChange={(e) => setFillMode(e.target.value as any)}
+            className="w-12 rounded border border-neutral-700 bg-neutral-800 px-1 py-1 text-[10px] text-neutral-200"
+          >
+            <option value="hex">hex</option>
+            <option value="rgb">rgb</option>
+            <option value="hsl">hsl</option>
+          </select>
+        </div>
+
+        {/* Fill opacity */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Opac</label>
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.01}
+            value={obj.fillOpacity}
+            onChange={(e) => updateObject(obj.id, { fillOpacity: Number(e.target.value) } as any)}
+            className="flex-1"
+          />
+          <span className="w-10 text-right font-mono text-[10px] text-neutral-400">
+            {Math.round(obj.fillOpacity * 100)}%
+          </span>
+        </div>
+
+        {/* Stroke */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Stroke</label>
+          <input
+            type="color"
+            value={obj.stroke === "transparent" ? "#000000" : obj.stroke}
+            onChange={(e) => updateObject(obj.id, { stroke: e.target.value } as any)}
+            className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+          />
+          <input
+            type="number"
+            value={obj.strokeWidth}
+            onChange={(e) => updateObject(obj.id, { strokeWidth: Number(e.target.value) } as any)}
+            className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+            step={0.5}
+            min={0}
+          />
+        </div>
+
+        {/* Delete */}
+        <button
+          onClick={() => removeObject(obj.id)}
+          className="mt-2 rounded bg-red-600 px-2 py-1 text-xs text-white hover:bg-red-500"
+        >
+          Delete
+        </button>
       </div>
     </section>
   );
