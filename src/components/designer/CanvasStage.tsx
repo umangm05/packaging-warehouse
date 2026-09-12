@@ -11,12 +11,23 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const FIT_PADDING = 40;
 const HANDLE_SIZE = 6;
+const ROTATE_HANDLE_OFFSET = 18;
+
+type HandleId = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 interface DragState {
-  type: "move" | "draw";
+  type: "move" | "draw" | "resize" | "rotate";
   startMmX: number;
   startMmY: number;
   tool?: "rect" | "ellipse" | "line" | "polygon";
+  // resize state
+  handle?: HandleId;
+  aspectLocked?: boolean;
+  origBounds?: { x: number; y: number; w: number; h: number };
+  // rotate state
+  origRotation?: number;
+  center?: { x: number; y: number };
+  // draw state
   currentMmX?: number;
   currentMmY?: number;
 }
@@ -36,7 +47,6 @@ export function CanvasStage({
   const setPan = useDesignerStore((s) => s.setPan);
   const fit = useDesignerStore((s) => s.fit);
   const objects = useDesignerStore((s) => s.objects);
-  const selectedId = useDesignerStore((s) => s.selectedId);
   const selectedIds = useDesignerStore((s) => s.selectedIds);
   const selectObject = useDesignerStore((s) => s.selectObject);
   const selectAdd = useDesignerStore((s) => s.selectAdd);
@@ -45,6 +55,11 @@ export function CanvasStage({
   const setActiveTool = useDesignerStore((s) => s.setActiveTool);
   const addObject = useDesignerStore((s) => s.addObject);
   const moveSelected = useDesignerStore((s) => s.moveSelected);
+  const updateObject = useDesignerStore((s) => s.updateObject);
+  const deleteSelected = useDesignerStore((s) => s.deleteSelected);
+  const beginInteraction = useDesignerStore((s) => s.beginInteraction);
+  const liveUpdateObject = useDesignerStore((s) => s.liveUpdateObject);
+  const endInteraction = useDesignerStore((s) => s.endInteraction);
   const background = useDesignerStore((s) => s.background);
 
   const [mouseMm, setMouseMm] = useState<{ x: number; y: number } | null>(null);
@@ -72,6 +87,10 @@ export function CanvasStage({
   }, [widthMm, heightMm]);
 
   const effectiveZoom = zoom === "fit" ? fitZoom : zoom;
+
+  // Keep a ref to effectiveZoom for use in event handlers
+  const effectiveZoomRef = useRef(effectiveZoom);
+  effectiveZoomRef.current = effectiveZoom;
 
   const screenToMm = useCallback(
     (px: number, py: number) => {
@@ -131,7 +150,7 @@ export function CanvasStage({
       const obj = objectAt(mm.x, mm.y);
       if (obj) {
         if (e.shiftKey) selectAdd(obj.id);
-        else if (selectedId !== obj.id) selectObject(obj.id);
+        else if (!selectedIds.includes(obj.id)) selectObject(obj.id);
         dragState.current = { type: "move", startMmX: mm.x, startMmY: mm.y };
       } else {
         clearSelection();
@@ -173,7 +192,7 @@ export function CanvasStage({
     const ds = dragState.current;
     if (!ds) return;
 
-    if (ds.type === "move" && selectedId && activeTool === "select") {
+    if (ds.type === "move" && selectedIds.length > 0 && activeTool === "select") {
       const dx = mmX - ds.startMmX;
       const dy = mmY - ds.startMmY;
       if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
@@ -186,6 +205,43 @@ export function CanvasStage({
     if (ds.type === "draw") {
       ds.currentMmX = mmX;
       ds.currentMmY = mmY;
+    }
+
+    if (ds.type === "resize" && ds.origBounds && ds.handle) {
+      const newBounds = computeResize(ds.origBounds, ds.handle, mmX, mmY, ds.aspectLocked ?? false);
+      // Apply to all selected objects (use the primary one for the drag)
+      const primaryId = selectedIds[0];
+      if (primaryId) {
+        const obj = objects.find((o) => o.id === primaryId);
+        if (obj) {
+          if (obj.type === "rect") {
+            updateObject(primaryId, {
+              x: newBounds.x,
+              y: newBounds.y,
+              width: newBounds.w,
+              height: newBounds.h,
+            } as any);
+          } else if (obj.type === "ellipse") {
+            updateObject(primaryId, {
+              x: newBounds.x + newBounds.w / 2,
+              y: newBounds.y + newBounds.h / 2,
+              rx: Math.max(1, newBounds.w / 2),
+              ry: Math.max(1, newBounds.h / 2),
+            } as any);
+          }
+        }
+      }
+    }
+
+    if (ds.type === "rotate" && ds.center && ds.origRotation !== undefined) {
+      const primaryId = selectedIds[0];
+      if (primaryId) {
+        const angle = Math.atan2(mmY - ds.center.y, mmX - ds.center.x) * (180 / Math.PI);
+        const delta = angle - ds.startMmX; // startMmX stores start angle
+        let newRot = (ds.origRotation + delta) % 360;
+        if (newRot < 0) newRot += 360;
+        updateObject(primaryId, { rotation: newRot } as any);
+      }
     }
   };
 
@@ -292,9 +348,8 @@ export function CanvasStage({
         setActiveTool("select");
       }
       if (e.key === "Delete" || e.key === "Backspace") {
-        if (selectedId) useDesignerStore.getState().removeObject(selectedId);
+        deleteSelected();
       }
-      // Tool shortcuts
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "v" || e.key === "V") setActiveTool("select");
         if (e.key === "r" || e.key === "R") setActiveTool("rect");
@@ -302,7 +357,6 @@ export function CanvasStage({
         if (e.key === "l" || e.key === "L") setActiveTool("line");
         if (e.key === "p" || e.key === "P") setActiveTool("polygon");
       }
-      // Undo/redo
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         if (e.shiftKey) useDesignerStore.getState().redo();
         else useDesignerStore.getState().undo();
@@ -315,7 +369,7 @@ export function CanvasStage({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [selectedId, clearSelection, setActiveTool]);
+  }, [clearSelection, setActiveTool, deleteSelected]);
 
   // Preview rect while drawing
   const previewObj = (() => {
@@ -411,20 +465,35 @@ export function CanvasStage({
 
       <g transform={`translate(${panX}, ${panY}) scale(${effectiveZoom})`}>
         {/* Canvas background */}
-        <rect
-          x={0}
-          y={0}
-          width={widthMm}
-          height={heightMm}
-          fill={
-            background.type === "solid"
-              ? background.color
-              : "url(#canvas-bg-gradient)"
-          }
-          stroke="#3b82f6"
-          strokeWidth={0.5}
-          vectorEffect="non-scaling-stroke"
-        />
+        {background.type !== "transparent" && (
+          <rect
+            x={0}
+            y={0}
+            width={widthMm}
+            height={heightMm}
+            fill={
+              background.type === "solid"
+                ? background.color
+                : "url(#canvas-bg-gradient)"
+            }
+            stroke="#3b82f6"
+            strokeWidth={0.5}
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
+        {background.type === "transparent" && (
+          <rect
+            x={0}
+            y={0}
+            width={widthMm}
+            height={heightMm}
+            fill="none"
+            stroke="#3b82f6"
+            strokeWidth={0.5}
+            strokeDasharray="4 4"
+            vectorEffect="non-scaling-stroke"
+          />
+        )}
 
         {background.type === "linear-gradient" && (
           <defs>
@@ -454,10 +523,12 @@ export function CanvasStage({
         {/* Drawing preview */}
         {previewObj}
 
-        {/* Selection handles */}
-        {selectedId && objects.find((o) => o.id === selectedId) && (
-          <SelectionHandles obj={objects.find((o) => o.id === selectedId)!} />
-        )}
+        {/* Selection handles — render for ALL selected objects */}
+        {selectedIds.map((id) => {
+          const obj = objects.find((o) => o.id === id);
+          if (!obj) return null;
+          return <SelectionHandles key={id} obj={obj} svgRef={svgRef} effectiveZoomRef={effectiveZoomRef} />;
+        })}
 
         {/* Crosshair */}
         {mouseMm &&
@@ -480,11 +551,64 @@ export function CanvasStage({
   );
 }
 
+/** Compute new bounds from a handle drag. */
+function computeResize(
+  orig: { x: number; y: number; w: number; h: number },
+  handle: HandleId,
+  mmX: number,
+  mmY: number,
+  aspectLocked: boolean
+): { x: number; y: number; w: number; h: number } {
+  let { x, y, w, h } = orig;
+  const right = x + w;
+  const bottom = y + h;
+
+  // Determine new edges based on handle
+  if (handle.includes("w")) {
+    x = Math.min(mmX, right - 1);
+    w = right - x;
+  }
+  if (handle.includes("e")) {
+    w = Math.max(1, mmX - x);
+  }
+  if (handle.includes("n")) {
+    y = Math.min(mmY, bottom - 1);
+    h = bottom - y;
+  }
+  if (handle.includes("s")) {
+    h = Math.max(1, mmY - y);
+  }
+
+  // Aspect lock: adjust the dimension that changed less
+  if (aspectLocked && w > 0 && h > 0) {
+    const origAspect = orig.w / orig.h;
+    const newAspect = w / h;
+    if (newAspect > origAspect) {
+      // width grew too much — adjust
+      if (handle.includes("e") || handle.includes("w")) {
+        w = h * origAspect;
+      } else {
+        h = w / origAspect;
+      }
+    } else {
+      if (handle.includes("n") || handle.includes("s")) {
+        h = w / origAspect;
+      } else {
+        w = h * origAspect;
+      }
+    }
+  }
+
+  return { x, y, w: Math.max(1, w), h: Math.max(1, h) };
+}
+
 function ObjectRenderer({ obj }: { obj: DesignObject }) {
   if (!obj.visible) return null;
 
   const fillCss =
-    obj.fill.type === "solid"
+    obj.fill.type === "transparent"
+      ? "none"
+      : obj.fill.type === "solid"
       ? colorToCss(obj.fill.color, obj.fillOpacity)
       : `url(#grad-${obj.id})`;
 
@@ -614,12 +738,12 @@ function GradientDef({ id, fill }: { id: string; fill: Fill }) {
   );
 }
 
-function SelectionHandles({ obj }: { obj: DesignObject }) {
+function SelectionHandles({ obj, svgRef, effectiveZoomRef }: { obj: DesignObject; svgRef: React.RefObject<SVGSVGElement | null>; effectiveZoomRef: React.RefObject<number> }) {
   if (!obj) return null;
   const b = getObjectBounds(obj);
   const center = { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 
-  const handles = [
+  const handles: Array<{ id: HandleId; x: number; y: number }> = [
     { id: "nw", x: b.x, y: b.y },
     { id: "n", x: center.x, y: b.y },
     { id: "ne", x: b.x + b.width, y: b.y },
@@ -631,10 +755,95 @@ function SelectionHandles({ obj }: { obj: DesignObject }) {
   ];
 
   const selectObject = useDesignerStore((s) => s.selectObject);
+  const liveUpdateObject = useDesignerStore((s) => s.liveUpdateObject);
+  const beginInteraction = useDesignerStore((s) => s.beginInteraction);
+  const endInteraction = useDesignerStore((s) => s.endInteraction);
 
-  const onHandleMouseDown = (e: React.MouseEvent, handleId: string) => {
+  const onHandleMouseDown = (e: React.MouseEvent, handleId: HandleId) => {
     e.stopPropagation();
     selectObject(obj.id);
+    beginInteraction();
+
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const onMove = (ev: MouseEvent) => {
+      const state = useDesignerStore.getState();
+      const zoom = effectiveZoomRef.current;
+      const rect = svg.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const mmX = (px - state.panX) / zoom;
+      const mmY = (py - state.panY) / zoom;
+
+      const orig = { x: b.x, y: b.y, w: b.width, h: b.height };
+      const newBounds = computeResize(orig, handleId, mmX, mmY, ev.shiftKey);
+
+      if (obj.type === "rect") {
+        liveUpdateObject(obj.id, {
+          x: newBounds.x,
+          y: newBounds.y,
+          width: newBounds.w,
+          height: newBounds.h,
+        } as any);
+      } else if (obj.type === "ellipse") {
+        liveUpdateObject(obj.id, {
+          x: newBounds.x + newBounds.w / 2,
+          y: newBounds.y + newBounds.h / 2,
+          rx: Math.max(1, newBounds.w / 2),
+          ry: Math.max(1, newBounds.h / 2),
+        } as any);
+      }
+    };
+
+    const onUp = () => {
+      endInteraction();
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
+  const onRotateMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    selectObject(obj.id);
+    beginInteraction();
+
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    let startAngle: number | null = null;
+    let origRotation = obj.rotation;
+
+    const onMove = (ev: MouseEvent) => {
+      const state = useDesignerStore.getState();
+      const zoom = effectiveZoomRef.current;
+      const rect = svg.getBoundingClientRect();
+      const px = ev.clientX - rect.left;
+      const py = ev.clientY - rect.top;
+      const mmX = (px - state.panX) / zoom;
+      const mmY = (py - state.panY) / zoom;
+
+      const angle = Math.atan2(mmY - center.y, mmX - center.x) * (180 / Math.PI);
+      if (startAngle === null) {
+        startAngle = angle;
+      }
+      const delta = angle - startAngle;
+      let newRot = (origRotation + delta) % 360;
+      if (newRot < 0) newRot += 360;
+      liveUpdateObject(obj.id, { rotation: newRot } as any);
+    };
+
+    const onUp = () => {
+      endInteraction();
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
   };
 
   return (
@@ -651,15 +860,27 @@ function SelectionHandles({ obj }: { obj: DesignObject }) {
         vectorEffect="non-scaling-stroke"
         pointerEvents="none"
       />
+      {/* Rotate handle line + circle */}
       <line
         x1={center.x}
         y1={b.y}
         x2={center.x}
-        y2={b.y - 18}
+        y2={b.y - ROTATE_HANDLE_OFFSET}
         stroke="#3b82f6"
         strokeWidth={0.3}
         vectorEffect="non-scaling-stroke"
         pointerEvents="none"
+      />
+      <circle
+        cx={center.x}
+        cy={b.y - ROTATE_HANDLE_OFFSET}
+        r={HANDLE_SIZE / 2}
+        fill="#3b82f6"
+        stroke="#fff"
+        strokeWidth={0.5}
+        vectorEffect="non-scaling-stroke"
+        onMouseDown={onRotateMouseDown}
+        style={{ cursor: "grab" }}
       />
       {handles.map((h) => (
         <circle
@@ -672,9 +893,28 @@ function SelectionHandles({ obj }: { obj: DesignObject }) {
           strokeWidth={0.5}
           vectorEffect="non-scaling-stroke"
           onMouseDown={(e) => onHandleMouseDown(e, h.id)}
-          style={{ cursor: "pointer" }}
+          style={{ cursor: getCursorForHandle(h.id) }}
         />
       ))}
     </g>
   );
+}
+
+function getCursorForHandle(handle: HandleId): string {
+  switch (handle) {
+    case "nw":
+    case "se":
+      return "nwse-resize";
+    case "ne":
+    case "sw":
+      return "nesw-resize";
+    case "n":
+    case "s":
+      return "ns-resize";
+    case "e":
+    case "w":
+      return "ew-resize";
+    default:
+      return "pointer";
+  }
 }

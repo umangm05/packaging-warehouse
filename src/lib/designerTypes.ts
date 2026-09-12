@@ -20,6 +20,7 @@ export interface GradientStop {
 
 export type Fill =
   | { type: "solid"; color: string } // hex
+  | { type: "transparent" }
   | {
       type: "linear-gradient";
       angle: number; // degrees, 0 = left-to-right

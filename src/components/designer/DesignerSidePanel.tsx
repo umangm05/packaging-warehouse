@@ -115,11 +115,13 @@ export function DesignerSidePanel() {
           <div className="flex items-center gap-2">
             <label className="w-12 text-xs text-neutral-400">Type</label>
             <select
-              value={background.type === "solid" ? "solid" : "linear-gradient"}
+              value={background.type === "solid" ? "solid" : background.type === "transparent" ? "transparent" : "linear-gradient"}
               onChange={(e) =>
                 setBackground(
                   e.target.value === "solid"
                     ? { type: "solid", color: background.type === "solid" ? background.color : "#ffffff" }
+                    : e.target.value === "transparent"
+                    ? { type: "transparent" }
                     : {
                         type: "linear-gradient",
                         angle: 0,
@@ -134,6 +136,7 @@ export function DesignerSidePanel() {
             >
               <option value="solid">Solid</option>
               <option value="linear-gradient">Linear Gradient</option>
+              <option value="transparent">Transparent</option>
             </select>
           </div>
           {background.type === "solid" ? (
@@ -155,7 +158,7 @@ export function DesignerSidePanel() {
                 className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
               />
             </div>
-          ) : (
+          ) : background.type === "linear-gradient" ? (
             <>
               <div className="flex items-center gap-2">
                 <label className="w-12 text-xs text-neutral-400">Angle</label>
@@ -163,7 +166,7 @@ export function DesignerSidePanel() {
                   type="number"
                   value={background.angle}
                   onChange={(e) =>
-                    setBackground({ ...background, angle: Number(e.target.value) })
+                    setBackground({ ...background, angle: Number(e.target.value) } as Fill)
                   }
                   className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
                 />
@@ -179,7 +182,7 @@ export function DesignerSidePanel() {
                     onChange={(e) => {
                       const stops = [...background.stops];
                       stops[i] = { ...stops[i], color: e.target.value };
-                      setBackground({ ...background, stops });
+                      setBackground({ ...background, stops } as Fill);
                     }}
                     className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
                   />
@@ -192,13 +195,15 @@ export function DesignerSidePanel() {
                     onChange={(e) => {
                       const stops = [...background.stops];
                       stops[i] = { ...stops[i], offset: Number(e.target.value) };
-                      setBackground({ ...background, stops });
+                      setBackground({ ...background, stops } as Fill);
                     }}
                     className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-xs text-neutral-200"
                   />
                 </div>
               ))}
             </>
+          ) : (
+            <div className="text-[11px] text-neutral-500">Transparent background — no fill rendered.</div>
           )}
         </div>
       </section>
@@ -222,63 +227,66 @@ export function DesignerSidePanel() {
               No layers yet — draw shapes to add them.
             </div>
           ) : (
-            objects.map((obj, idx) => (
-              <div
-                key={obj.id}
-                onClick={() => selectObject(obj.id)}
-                className={`flex items-center gap-2 rounded border px-2 py-1 text-xs cursor-pointer ${
-                  selectedIds.includes(obj.id)
-                    ? "border-amber-500/60 bg-amber-500/10 text-amber-200"
-                    : "border-neutral-800 bg-neutral-800/40 text-neutral-300 hover:border-neutral-700"
-                }`}
-              >
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleVisible(obj.id);
-                  }}
-                  className={`text-[10px] ${obj.visible ? "text-neutral-400" : "text-neutral-600"}`}
-                  title={obj.visible ? "Hide" : "Show"}
+            [...objects].reverse().map((obj, idx) => {
+              const realIdx = objects.length - 1 - idx;
+              return (
+                <div
+                  key={obj.id}
+                  onClick={() => selectObject(obj.id)}
+                  className={`flex items-center gap-2 rounded border px-2 py-1 text-xs cursor-pointer ${
+                    selectedIds.includes(obj.id)
+                      ? "border-amber-500/60 bg-amber-500/10 text-amber-200"
+                      : "border-neutral-800 bg-neutral-800/40 text-neutral-300 hover:border-neutral-700"
+                  }`}
                 >
-                  {obj.visible ? "👁" : "👁‍🗨"}
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleLock(obj.id);
-                  }}
-                  className={`text-[10px] ${obj.locked ? "text-amber-400" : "text-neutral-600"}`}
-                  title={obj.locked ? "Unlock" : "Lock"}
-                >
-                  {obj.locked ? "🔒" : "🔓"}
-                </button>
-                <span className="flex-1 truncate">{obj.name}</span>
-                <div className="flex gap-0.5">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      bringForward(obj.id);
+                      toggleVisible(obj.id);
                     }}
-                    disabled={idx === objects.length - 1}
-                    className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
-                    title="Bring forward"
+                    className={`text-[10px] ${obj.visible ? "text-neutral-400" : "text-neutral-600"}`}
+                    title={obj.visible ? "Hide" : "Show"}
                   >
-                    ↑
+                    {obj.visible ? "👁" : "👁‍🗨"}
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      sendBackward(obj.id);
+                      toggleLock(obj.id);
                     }}
-                    disabled={idx === 0}
-                    className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
-                    title="Send backward"
+                    className={`text-[10px] ${obj.locked ? "text-amber-400" : "text-neutral-600"}`}
+                    title={obj.locked ? "Unlock" : "Lock"}
                   >
-                    ↓
+                    {obj.locked ? "🔒" : "🔓"}
                   </button>
+                  <span className="flex-1 truncate">{obj.name}</span>
+                  <div className="flex gap-0.5">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        bringForward(obj.id);
+                      }}
+                      disabled={realIdx === objects.length - 1}
+                      className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
+                      title="Bring forward"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        sendBackward(obj.id);
+                      }}
+                      disabled={realIdx === 0}
+                      className="text-[10px] text-neutral-500 hover:text-neutral-200 disabled:opacity-30"
+                      title="Send backward"
+                    >
+                      ↓
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))
+              );
+            })
           )}
         </div>
       </section>
@@ -454,39 +462,132 @@ function PropertiesPanel({
         {/* Fill */}
         <div className="flex items-center gap-2">
           <label className="w-12 text-neutral-400">Fill</label>
-          <input
-            type="color"
-            value={obj.fill.type === "solid" ? obj.fill.color : "#000000"}
+          <select
+            value={obj.fill.type === "solid" ? "solid" : obj.fill.type === "transparent" ? "transparent" : "linear-gradient"}
             onChange={(e) =>
               updateObject(obj.id, {
-                fill: { type: "solid", color: e.target.value },
+                fill: e.target.value === "solid"
+                  ? { type: "solid", color: "#4f8cff" }
+                  : e.target.value === "transparent"
+                  ? { type: "transparent" }
+                  : { type: "linear-gradient", angle: 0, stops: [{ offset: 0, color: "#ffffff" }, { offset: 1, color: "#000000" }] },
               } as any)
             }
-            className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
-          />
-          <input
-            type="text"
-            value={
-              obj.fill.type === "solid"
-                ? formatColorForMode(obj.fill.color, fillMode)
-                : "gradient"
-            }
-            onChange={(e) => {
-              const c = parseColor(e.target.value);
-              if (c) updateObject(obj.id, { fill: { type: "solid", color: c } } as any);
-            }}
-            className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
-          />
-          <select
-            value={fillMode}
-            onChange={(e) => setFillMode(e.target.value as any)}
-            className="w-12 rounded border border-neutral-700 bg-neutral-800 px-1 py-1 text-[10px] text-neutral-200"
+            className="rounded border border-neutral-700 bg-neutral-800 px-1 py-1 text-[10px] text-neutral-200"
           >
-            <option value="hex">hex</option>
-            <option value="rgb">rgb</option>
-            <option value="hsl">hsl</option>
+            <option value="solid">Solid</option>
+            <option value="linear-gradient">Gradient</option>
+            <option value="transparent">None</option>
           </select>
         </div>
+
+        {obj.fill.type === "solid" && (
+          <div className="flex items-center gap-2">
+            <label className="w-12 text-neutral-400">Color</label>
+            <input
+              type="color"
+              value={obj.fill.color}
+              onChange={(e) => updateObject(obj.id, { fill: { type: "solid", color: e.target.value } } as any)}
+              className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+            />
+            <input
+              type="text"
+              value={formatColorForMode(obj.fill.color, fillMode)}
+              onChange={(e) => {
+                const c = parseColor(e.target.value);
+                if (c) updateObject(obj.id, { fill: { type: "solid", color: c } } as any);
+              }}
+              className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+            />
+            <select
+              value={fillMode}
+              onChange={(e) => setFillMode(e.target.value as any)}
+              className="w-12 rounded border border-neutral-700 bg-neutral-800 px-1 py-1 text-[10px] text-neutral-200"
+            >
+              <option value="hex">hex</option>
+              <option value="rgb">rgb</option>
+              <option value="hsl">hsl</option>
+            </select>
+          </div>
+        )}
+
+        {obj.fill.type === "linear-gradient" && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Angle</label>
+              <input
+                type="number"
+                value={obj.fill.angle}
+                onChange={(e) => updateObject(obj.id, { fill: { ...obj.fill, angle: Number(e.target.value) } } as any)}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              />
+            </div>
+            {obj.fill.stops.map((stop, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <label className="w-12 text-neutral-400">Stop {i + 1}</label>
+                <input
+                  type="color"
+                  value={stop.color}
+                  onChange={(e) => {
+                    const stops = [...(obj.fill as any).stops];
+                    stops[i] = { ...stops[i], color: e.target.value };
+                    updateObject(obj.id, { fill: { ...obj.fill, stops } } as any);
+                  }}
+                  className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                />
+                <input
+                  type="number"
+                  min={0} max={1} step={0.01}
+                  value={stop.offset}
+                  onChange={(e) => {
+                    const stops = [...(obj.fill as any).stops];
+                    stops[i] = { ...stops[i], offset: Number(e.target.value) };
+                    updateObject(obj.id, { fill: { ...obj.fill, stops } } as any);
+                  }}
+                  className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Palette */}
+        <div className="flex items-center gap-2">
+          <label className="w-12 text-neutral-400">Palette</label>
+          <div className="flex flex-wrap gap-1">
+            {["#000000","#ffffff","#ef4444","#f59e0b","#10b981","#3b82f6","#8b5cf6","#ec4899","#6b7280"].map((c) => (
+              <button
+                key={c}
+                onClick={() => updateObject(obj.id, { fill: { type: "solid", color: c } } as any)}
+                className="h-5 w-5 rounded border border-neutral-700"
+                style={{ backgroundColor: c }}
+                title={c}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Polygon sides */}
+        {obj.type === "polygon" && (
+          <div className="flex items-center gap-2">
+            <label className="w-12 text-neutral-400">Sides</label>
+            <input
+              type="number"
+              min={3} max={20}
+              value={obj.sides}
+              onChange={(e) => {
+                const sides = Math.max(3, Math.min(20, Number(e.target.value)));
+                const radius = Math.max(...obj.points.map((p) => Math.sqrt(p.x * p.x + p.y * p.y)), 10);
+                const points = Array.from({ length: sides }, (_, i) => {
+                  const angle = (i * 2 * Math.PI) / sides - Math.PI / 2;
+                  return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+                });
+                updateObject(obj.id, { sides, points } as any);
+              }}
+              className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+            />
+          </div>
+        )}
 
         {/* Fill opacity */}
         <div className="flex items-center gap-2">

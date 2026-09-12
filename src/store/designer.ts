@@ -55,11 +55,18 @@ interface DesignerState {
   setPan: (x: number, y: number) => void;
   fit: () => void;
 
+  // --- interaction (resize/rotate drag) ---
+  interactionSnapshot: HistoryEntry | null;
+
   // --- scene actions ---
   setActiveTool: (tool: DesignerState["activeTool"]) => void;
   addObject: (obj: OmitIdName<DesignObject>) => string;
   removeObject: (id: string) => void;
+  deleteSelected: () => void;
   updateObject: (id: string, patch: Partial<DesignObject>) => void;
+  beginInteraction: () => void;
+  liveUpdateObject: (id: string, patch: Partial<DesignObject>) => void;
+  endInteraction: () => void;
   selectObject: (id: string | null) => void;
   selectAdd: (id: string) => void;
   clearSelection: () => void;
@@ -153,6 +160,7 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
 
     history: [],
     redoStack: [],
+    interactionSnapshot: null,
 
     activeTool: "select",
 
@@ -189,6 +197,42 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
         const selectedIds = s.selectedIds.filter((sid) => sid !== id);
         return { objects, selectedId, selectedIds };
       }),
+
+    deleteSelected: () => {
+      const { selectedIds } = get();
+      if (selectedIds.length === 0) return;
+      commit((s) => ({
+        objects: s.objects.filter((o) => !s.selectedIds.includes(o.id)),
+        selectedId: null,
+        selectedIds: [],
+      }));
+    },
+
+    beginInteraction: () => {
+      const s = get();
+      if (s.interactionSnapshot === null) {
+        set({ interactionSnapshot: snapshot(s) });
+      }
+    },
+
+    liveUpdateObject: (id, patch) => {
+      set((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id ? ({ ...o, ...patch } as DesignObject) : o
+        ),
+      }));
+    },
+
+    endInteraction: () => {
+      const { interactionSnapshot } = get();
+      if (interactionSnapshot !== null) {
+        set((s) => ({
+          history: [...s.history, interactionSnapshot],
+          redoStack: [],
+          interactionSnapshot: null,
+        }));
+      }
+    },
 
     updateObject: (id, patch) =>
       commit((s) => ({
