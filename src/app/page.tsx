@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BoxCanvas, type ExportHandle } from "@/components/BoxScene";
 import { useBoxStore } from "@/store/box";
 import type { SideStyle } from "@/store/box";
@@ -14,40 +14,53 @@ import {
   makeFilename,
 } from "@/lib/export";
 import type { ExportFormat, PDFOptions, PNGBackground, PNGOptions } from "@/lib/export";
+import { useDimInput } from "@/hooks/useDimInput";
+import { DIM_LIMITS, type DimKey } from "@/lib/dimValidation";
 
 function DimField({
   label,
   value,
-  min,
-  max,
+  dimKey,
   onChange,
 }: {
   label: string;
   value: number;
-  min: number;
-  max: number;
+  dimKey: DimKey;
   onChange: (v: number) => void;
 }) {
+  const { text, error, onTextBlur, onTextKeyDown, onSliderChange, setText } =
+    useDimInput(value, onChange, dimKey);
+  const limits = DIM_LIMITS[dimKey];
+
   return (
-    <label className="flex items-center gap-2 text-sm">
-      <span className="w-6 font-semibold text-neutral-400">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1 accent-amber-500"
-      />
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-right text-sm text-neutral-100"
-      />
-      <span className="w-8 text-xs text-neutral-500">mm</span>
+    <label className="flex flex-col gap-1 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="w-6 font-semibold text-neutral-400">{label}</span>
+        <input
+          type="range"
+          min={limits.min}
+          max={limits.max}
+          value={value}
+          onChange={(e) => onSliderChange(e.target.value)}
+          className="flex-1 accent-amber-500"
+        />
+        <input
+          type="number"
+          value={text}
+          min={limits.min}
+          max={limits.max}
+          step={1}
+          data-dim-key={dimKey}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={onTextBlur}
+          onKeyDown={onTextKeyDown}
+          className={`w-16 rounded border bg-neutral-800 px-2 py-0.5 text-right text-sm text-neutral-100 ${
+            error ? "border-red-500" : "border-neutral-700"
+          }`}
+        />
+        <span className="w-8 text-xs text-neutral-500">mm</span>
+      </div>
+      {error && <span className="text-[11px] text-red-400">{error}</span>}
     </label>
   );
 }
@@ -238,13 +251,21 @@ export default function Page() {
               Box dimensions
             </h2>
             <div className="flex flex-col gap-2">
-              <DimField label="W" value={L} min={20} max={500} onChange={(v) => setDims({ L: v })} />
-              <DimField label="D" value={W} min={20} max={500} onChange={(v) => setDims({ W: v })} />
-              <DimField label="H" value={H} min={20} max={400} onChange={(v) => setDims({ H: v })} />
+              <DimField label="W" value={L} dimKey="L" onChange={(v) => setDims({ L: v })} />
+              <DimField label="D" value={W} dimKey="W" onChange={(v) => setDims({ W: v })} />
+              <DimField label="H" value={H} dimKey="H" onChange={(v) => setDims({ H: v })} />
             </div>
-            <p className="mt-1 text-[11px] text-neutral-600">
-              Mesh rebuilds &amp; UVs remap in real time.
-            </p>
+            <div className="mt-2 flex items-center justify-between">
+              <p className="text-[11px] text-neutral-600">
+                Mesh rebuilds &amp; UVs remap in real time.
+              </p>
+              <button
+                onClick={() => useBoxStore.getState().resetDims()}
+                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-amber-500/60 hover:text-amber-200"
+              >
+                Reset
+              </button>
+            </div>
           </div>
 
           {/* side style */}
