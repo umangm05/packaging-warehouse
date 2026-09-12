@@ -3,6 +3,7 @@
 import { useCallback, useRef, useState } from "react";
 import { BoxCanvas } from "@/components/BoxScene";
 import { useBoxStore } from "@/store/box";
+import { BOX_PRESETS } from "@/lib/presets";
 import type { SideStyle } from "@/store/box";
 
 function DimField({
@@ -46,11 +47,13 @@ export default function Page() {
   const L = useBoxStore((s) => s.L);
   const W = useBoxStore((s) => s.W);
   const H = useBoxStore((s) => s.H);
+  const presetId = useBoxStore((s) => s.presetId);
   const side = useBoxStore((s) => s.side);
   const showGuides = useBoxStore((s) => s.showGuides);
   const artworkUrl = useBoxStore((s) => s.artworkUrl);
   const artworkName = useBoxStore((s) => s.artworkName);
   const setDims = useBoxStore((s) => s.setDims);
+  const applyPreset = useBoxStore((s) => s.applyPreset);
   const setSide = useBoxStore((s) => s.setSide);
   const setShowGuides = useBoxStore((s) => s.setShowGuides);
   const setArtwork = useBoxStore((s) => s.setArtwork);
@@ -110,6 +113,32 @@ export default function Page() {
 
         {/* control panel */}
         <aside className="flex w-full flex-col gap-4 overflow-y-auto border-t border-neutral-800 bg-neutral-900 p-5 md:w-80 md:border-l md:border-t-0">
+          {/* preset picker */}
+          <div>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Box preset
+            </h2>
+            <div className="flex flex-col gap-1.5">
+              {BOX_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => applyPreset(p.id)}
+                  className={`rounded-md border px-3 py-2 text-left transition ${
+                    presetId === p.id
+                      ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                      : "border-neutral-700 bg-neutral-800/50 text-neutral-300 hover:border-neutral-500"
+                  }`}
+                >
+                  <div className="text-sm font-medium">{p.name}</div>
+                  <div className="text-[11px] text-neutral-500">{p.useCase}</div>
+                  <div className="mt-0.5 font-mono text-[10px] text-neutral-600">
+                    {p.defaultL}×{p.defaultW}×{p.defaultH} mm
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* artwork */}
           <div>
             <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
@@ -179,9 +208,9 @@ export default function Page() {
               Box dimensions
             </h2>
             <div className="flex flex-col gap-2">
-              <DimField label="W" value={L} min={20} max={500} onChange={(v) => setDims({ L: v })} />
-              <DimField label="D" value={W} min={20} max={500} onChange={(v) => setDims({ W: v })} />
-              <DimField label="H" value={H} min={20} max={400} onChange={(v) => setDims({ H: v })} />
+              <DimField label="L" value={L} min={10} max={500} onChange={(v) => setDims({ L: v })} />
+              <DimField label="W" value={W} min={10} max={500} onChange={(v) => setDims({ W: v })} />
+              <DimField label="H" value={H} min={10} max={400} onChange={(v) => setDims({ H: v })} />
             </div>
             <p className="mt-1 text-[11px] text-neutral-600">
               Mesh rebuilds &amp; UVs remap in real time.
