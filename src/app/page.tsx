@@ -1,9 +1,19 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
-import { BoxCanvas } from "@/components/BoxScene";
+import { BoxCanvas, type ExportHandle } from "@/components/BoxScene";
 import { useBoxStore } from "@/store/box";
 import type { SideStyle } from "@/store/box";
+import { computeLayout } from "@/lib/box";
+import {
+  captureLivePNG,
+  downloadBytes,
+  downloadDataUrl,
+  drawFrontCanvas,
+  generatePDF,
+  makeFilename,
+} from "@/lib/export";
+import type { ExportFormat, PDFOptions, PNGBackground, PNGOptions } from "@/lib/export";
 
 function DimField({
   label,
@@ -42,6 +52,16 @@ function DimField({
   );
 }
 
+function loadImage(url: string | null): Promise<HTMLImageElement | null> {
+  if (!url) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
 export default function Page() {
   const L = useBoxStore((s) => s.L);
   const W = useBoxStore((s) => s.W);
@@ -54,6 +74,14 @@ export default function Page() {
   const setSide = useBoxStore((s) => s.setSide);
   const setShowGuides = useBoxStore((s) => s.setShowGuides);
   const setArtwork = useBoxStore((s) => s.setArtwork);
+
+  // --- export state ---
+  const exportRef = useRef<ExportHandle>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
+  const [pngScale, setPngScale] = useState<1 | 2 | 4>(2);
+  const [pngBg, setPngBg] = useState<PNGBackground>("studio");
+  const [pdfDpi, setPdfDpi] = useState<150 | 300>(150);
+  const [exporting, setExporting] = useState(false);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -84,6 +112,37 @@ export default function Page() {
     { id: "dark", label: "Dark", swatch: "#c8b893" },
   ];
 
+  async function handleExport() {
+    setExporting(true);
+    try {
+      if (exportFormat === "png") {
+        const { gl, scene, camera } = exportRef.current ?? {};
+        if (!gl || !scene || !camera) {
+          alert("Renderer not ready yet.");
+          return;
+        }
+        const opts: PNGOptions = { scale: pngScale, background: pngBg };
+        const dataUrl = captureLivePNG(gl, scene, camera, opts);
+        downloadDataUrl(dataUrl, makeFilename(L, W, H, "png"));
+      } else {
+        // PDF — front face at physical L×H
+        const layout = computeLayout(L, W, H);
+        const pxW = Math.round((L * pdfDpi) / 25.4);
+        const pxH = Math.round((H * pdfDpi) / 25.4);
+        const artImage = await loadImage(artworkUrl);
+        const front = drawFrontCanvas(layout, artImage, pxW, pxH, side);
+        const filename = makeFilename(L, W, H, "pdf");
+        const bytes = await generatePDF(L, H, front, filename);
+        downloadBytes(bytes, filename);
+      }
+    } catch (err) {
+      console.error("Export failed", err);
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-950 font-sans text-neutral-100">
       {/* header */}
@@ -102,7 +161,7 @@ export default function Page() {
       <div className="flex flex-1 flex-col overflow-hidden md:flex-row">
         {/* 3D viewport */}
         <section className="relative min-h-0 flex-1">
-          <BoxCanvas />
+          <BoxCanvas ref={exportRef} />
           <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-[11px] text-neutral-300">
             drag to orbit · scroll to zoom
           </div>
@@ -212,6 +271,111 @@ export default function Page() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* --- EXPORT --- */}
+          <div>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Export
+            </h2>
+
+            {/* format toggle */}
+            <div className="mb-3 flex gap-2">
+              {(["png", "pdf"] as ExportFormat[]).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setExportFormat(f)}
+                  className={`flex-1 rounded-md border px-2 py-1 text-sm font-medium uppercase tracking-wide transition ${
+                    exportFormat === f
+                      ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                      : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+
+            {/* PNG-specific options */}
+            {exportFormat === "png" && (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <div className="mb-1 text-[11px] text-neutral-500">Resolution</div>
+                  <div className="flex gap-2">
+                    {([1, 2, 4] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setPngScale(s)}
+                        className={`flex-1 rounded border px-2 py-1 text-xs transition ${
+                          pngScale === s
+                            ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                            : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                        }`}
+                      >
+                        {s}×
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-neutral-500">Background</div>
+                  <div className="flex gap-2">
+                    {(["transparent", "studio", "white"] as PNGBackground[]).map((b) => (
+                      <button
+                        key={b}
+                        onClick={() => setPngBg(b)}
+                        className={`flex-1 rounded border px-2 py-1 text-[11px] capitalize transition ${
+                          pngBg === b
+                            ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                            : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* PDF-specific options */}
+            {exportFormat === "pdf" && (
+              <div>
+                <div className="mb-1 text-[11px] text-neutral-500">Print DPI</div>
+                <div className="flex gap-2">
+                  {([150, 300] as const).map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setPdfDpi(d)}
+                      className={`flex-1 rounded border px-2 py-1 text-xs transition ${
+                        pdfDpi === d
+                          ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                          : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-neutral-600">
+                  Page = {L}×{H} mm (front face) · {Math.round((L * pdfDpi) / 25.4)}×{Math.round((H * pdfDpi) / 25.4)} px
+                </p>
+              </div>
+            )}
+
+            {/* export button */}
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="mt-3 w-full rounded-md bg-amber-500 px-3 py-2 text-sm font-semibold text-neutral-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting ? "Exporting…" : `Download ${exportFormat.toUpperCase()}`}
+            </button>
+            <p className="mt-1 text-[11px] text-neutral-600">
+              {exportFormat === "png"
+                ? "Captures the live 3D view."
+                : "Print-shaped PDF at the box's physical front dimensions."}
+            </p>
           </div>
 
           {/* guides toggle */}
