@@ -7,6 +7,13 @@ import { useBoxStore } from "@/store/box";
 import { FACE_NAMES } from "@/store/box";
 import type { FaceIndex, SideStyle } from "@/store/box";
 import { BOX_PRESETS } from "@/lib/presets";
+import {
+  validateFile,
+  formatFileSize,
+  ACCEPT_STRING,
+  recommendedPixels,
+  type ImageFileInfo,
+} from "@/lib/fileValidation";
 
 function DimField({
   label,
@@ -91,23 +98,38 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
   const masterImage = useBoxStore((s) => s.masterImage);
   const masterCrop = useBoxStore((s) => s.masterCrop);
   const masterScale = useBoxStore((s) => s.masterScale);
+  const L = useBoxStore((s) => s.L);
+  const W = useBoxStore((s) => s.W);
+  const H = useBoxStore((s) => s.H);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [showCrop, setShowCrop] = useState(false);
   const [cropImage, setCropImage] = useState<HTMLImageElement | null>(null);
+  const [processing, setProcessing] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [imageInfo, setImageInfo] = useState<ImageFileInfo | null>(null);
+  const pendingSizeRef = useRef<number>(0);
 
   const displayedCrop = face.useOverride ? face.crop : masterCrop;
   const displayedScale = face.useOverride ? face.scale : masterScale;
   const displayedImage = face.useOverride ? face.image : masterImage;
   const isOverridden = face.useOverride;
 
+  const faceMM = [L, W, H, L, W, W][faceIndex];
+  const recommendedPx = recommendedPixels(faceMM);
+
   const handleFile = useCallback(
     (file: File | null | undefined) => {
       if (!file) return;
-      if (!/image\/(png|jpe?g|webp|gif|avif)/i.test(file.type)) {
-        alert("Please drop a PNG, JPG, WEBP or GIF image.");
+      const result = validateFile(file);
+      if (!result.valid) {
+        setFileError(result.error);
+        setProcessing(false);
         return;
       }
+      setFileError(null);
+      setProcessing(true);
+      pendingSizeRef.current = file.size;
       if (face.image) URL.revokeObjectURL(face.image);
       const url = URL.createObjectURL(file);
       setFaceImage(faceIndex, url, file.name);
@@ -119,6 +141,8 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
   useEffect(() => {
     if (!displayedImage) {
       setCropImage(null);
+      setProcessing(false);
+      setImageInfo(null);
       return;
     }
     const img = new Image();
@@ -128,11 +152,19 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
       try {
         await img.decode();
       } catch {
-        img.onload = () => !cancelled && setCropImage(img);
+        img.onload = () => {
+          if (cancelled) return;
+          setCropImage(img);
+          setImageInfo({ width: img.naturalWidth, height: img.naturalHeight, fileSize: pendingSizeRef.current });
+          setProcessing(false);
+        };
         img.src = displayedImage;
         return;
       }
-      if (!cancelled) setCropImage(img);
+      if (cancelled) return;
+      setCropImage(img);
+      setImageInfo({ width: img.naturalWidth, height: img.naturalHeight, fileSize: pendingSizeRef.current });
+      setProcessing(false);
     })();
     img.src = displayedImage;
     return () => {
@@ -166,13 +198,30 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
       {isOverridden && (
         <>
           <div
-            onClick={() => fileRef.current?.click()}
-            className="mb-2 flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed border-neutral-600 bg-neutral-800/50 py-3 text-center text-[11px] text-neutral-400 hover:border-amber-500/60"
+            onClick={() => !processing && fileRef.current?.click()}
+            className={`relative mb-2 flex cursor-pointer flex-col items-center justify-center gap-1 rounded border border-dashed py-3 text-center text-[11px] transition ${
+              fileError
+                ? "border-red-500/70 bg-red-500/5"
+                : processing
+                  ? "border-amber-500/50 bg-amber-500/5"
+                  : "border-neutral-600 bg-neutral-800/50 hover:border-amber-500/60"
+            } ${processing ? "pointer-events-none" : ""}`}
           >
+            {processing && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center rounded bg-neutral-950/60 backdrop-blur-sm">
+                <div className="flex items-center gap-2 text-amber-300">
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+                  </svg>
+                  <span className="text-[11px] font-medium">Decoding image…</span>
+                </div>
+              </div>
+            )}
             <input
               ref={fileRef}
               type="file"
-              accept="image/png,image/jpeg,image/webp,image/gif"
+              accept={ACCEPT_STRING}
               className="hidden"
               onChange={(e) => {
                 handleFile(e.target.files?.[0]);
@@ -180,17 +229,34 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
               }}
             />
             {face.image ? (
-              <>
-                <span className="text-neutral-200">Replace image</span>
-                <span className="truncate text-neutral-500">{face.imageName}</span>
-              </>
+              <span className="text-neutral-200">Replace image</span>
+            ) : processing ? (
+              <span className="text-neutral-400">Selecting…</span>
             ) : (
               <>
                 <span className="text-2xl">🖼️</span>
                 <span>Click to upload</span>
+                <span className="text-[9px] text-neutral-600">
+                  Need ~{recommendedPx} px for crisp print
+                </span>
               </>
             )}
           </div>
+
+          {fileError && (
+            <div className="mb-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
+              <span className="font-semibold">⚠ Upload error</span>
+              <span>{fileError}</span>
+              <span className="text-red-400/70">Accepted: PNG, JPG, WEBP, GIF, AVIF ≤ 50 MB</span>
+            </div>
+          )}
+
+          {imageInfo && !processing && (
+            <div className="mb-2 flex items-center justify-between rounded bg-neutral-800/70 px-2 py-1 text-[10px] text-neutral-400">
+              <span>{imageInfo.width} × {imageInfo.height} px</span>
+              <span>{formatFileSize(imageInfo.fileSize)}</span>
+            </div>
+          )}
 
           {face.image && (
             <div className="mb-2 flex gap-1">
@@ -264,10 +330,20 @@ export default function Page() {
   const [selectedFace, setSelectedFace] = useState<FaceIndex>(4);
   const [showMasterCrop, setShowMasterCrop] = useState(false);
   const [masterCropImage, setMasterCropImage] = useState<HTMLImageElement | null>(null);
+  const [masterProcessing, setMasterProcessing] = useState(false);
+  const [masterError, setMasterError] = useState<string | null>(null);
+  const [masterInfo, setMasterInfo] = useState<ImageFileInfo | null>(null);
+  const masterPendingSizeRef = useRef<number>(0);
+
+  // Recommended pixel count for the master — uses longest box edge at 300 DPI.
+  const masterMM = Math.max(L, W, H);
+  const masterRecommendedPx = recommendedPixels(masterMM);
 
   useEffect(() => {
     if (!masterImage) {
       setMasterCropImage(null);
+      setMasterProcessing(false);
+      setMasterInfo(null);
       return;
     }
     const img = new Image();
@@ -277,11 +353,19 @@ export default function Page() {
       try {
         await img.decode();
       } catch {
-        img.onload = () => !cancelled && setMasterCropImage(img);
+        img.onload = () => {
+          if (cancelled) return;
+          setMasterCropImage(img);
+          setMasterInfo({ width: img.naturalWidth, height: img.naturalHeight, fileSize: masterPendingSizeRef.current });
+          setMasterProcessing(false);
+        };
         img.src = masterImage;
         return;
       }
-      if (!cancelled) setMasterCropImage(img);
+      if (cancelled) return;
+      setMasterCropImage(img);
+      setMasterInfo({ width: img.naturalWidth, height: img.naturalHeight, fileSize: masterPendingSizeRef.current });
+      setMasterProcessing(false);
     })();
     img.src = masterImage;
     return () => {
@@ -295,10 +379,15 @@ export default function Page() {
   const handleMasterFile = useCallback(
     (file: File | null | undefined) => {
       if (!file) return;
-      if (!/image\/(png|jpe?g|webp|gif|avif)/i.test(file.type)) {
-        alert("Please drop a PNG, JPG, WEBP or GIF image.");
+      const result = validateFile(file);
+      if (!result.valid) {
+        setMasterError(result.error);
+        setMasterProcessing(false);
         return;
       }
+      setMasterError(null);
+      setMasterProcessing(true);
+      masterPendingSizeRef.current = file.size;
       if (masterImage) URL.revokeObjectURL(masterImage);
       const url = URL.createObjectURL(file);
       setMasterImage(url, file.name);
@@ -310,6 +399,8 @@ export default function Page() {
     if (masterImage) URL.revokeObjectURL(masterImage);
     setMasterImage(null, null);
     setMasterCrop(null);
+    setMasterError(null);
+    setMasterInfo(null);
   };
 
   const sideOptions: { id: SideStyle; label: string; swatch: string }[] = [
@@ -398,17 +489,32 @@ export default function Page() {
                 masterDragOver.current = false;
                 handleMasterFile(e.dataTransfer.files?.[0]);
               }}
-              onClick={() => masterFileRef.current?.click()}
-              className={`flex cursor-pointer flex-col items-center justify-center gap-1 rounded border-2 border-dashed px-3 py-3 text-center text-[11px] transition ${
-                masterDragOver.current
-                  ? "border-amber-400 bg-amber-400/10"
-                  : "border-neutral-700 bg-neutral-800/50 hover:border-amber-500/60"
-              }`}
+              onClick={() => !masterProcessing && masterFileRef.current?.click()}
+              className={`relative flex cursor-pointer flex-col items-center justify-center gap-1 rounded border-2 border-dashed px-3 py-3 text-center text-[11px] transition ${
+                masterError
+                  ? "border-red-500/70 bg-red-500/5"
+                  : masterDragOver.current
+                    ? "border-amber-400 bg-amber-400/10"
+                    : masterProcessing
+                      ? "border-amber-500/50 bg-amber-500/5"
+                      : "border-neutral-700 bg-neutral-800/50 hover:border-amber-500/60"
+              } ${masterProcessing ? "pointer-events-none" : ""}`}
             >
+              {masterProcessing && (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded bg-neutral-950/60 backdrop-blur-sm">
+                  <div className="flex items-center gap-2 text-amber-300">
+                    <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+                    </svg>
+                    <span className="text-[11px] font-medium">Decoding image…</span>
+                  </div>
+                </div>
+              )}
               <input
                 ref={masterFileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept={ACCEPT_STRING}
                 className="hidden"
                 onChange={(e) => {
                   handleMasterFile(e.target.files?.[0]);
@@ -423,6 +529,11 @@ export default function Page() {
                     className="max-h-10 rounded border border-neutral-700 object-contain"
                   />
                   <span className="max-w-full truncate text-neutral-300">{masterImageName}</span>
+                  {masterInfo && (
+                    <span className="text-[10px] text-neutral-500">
+                      {masterInfo.width}×{masterInfo.height} px · {formatFileSize(masterInfo.fileSize)}
+                    </span>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -433,14 +544,27 @@ export default function Page() {
                     Remove
                   </button>
                 </div>
+              ) : masterProcessing ? (
+                <span className="text-neutral-400">Selecting…</span>
               ) : (
                 <>
                   <span className="text-2xl">🖼️</span>
                   <span className="font-medium">Master image</span>
                   <span className="text-neutral-500">Upload once · inherited by faces</span>
+                  <span className="text-[9px] text-neutral-600">
+                    Need ~{masterRecommendedPx} px for crisp print
+                  </span>
                 </>
               )}
             </div>
+
+            {masterError && (
+              <div className="mt-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
+                <span className="font-semibold">⚠ Upload error</span>
+                <span>{masterError}</span>
+                <span className="text-red-400/70">Accepted: PNG, JPG, WEBP, GIF, AVIF ≤ 50 MB</span>
+              </div>
+            )}
             {masterImage && (
               <div className="mt-2 space-y-1">
                 <button
