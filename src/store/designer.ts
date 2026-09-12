@@ -42,7 +42,7 @@ interface DesignerState {
   redoStack: HistoryEntry[];
 
   // --- active tool ---
-  activeTool: "select" | "rect" | "ellipse" | "line" | "polygon";
+  activeTool: "select" | "rect" | "ellipse" | "line" | "polygon" | "text";
 
   // --- document actions ---
   setCanvasSize: (widthMm: number, heightMm: number) => void;
@@ -319,6 +319,12 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
               ...o,
               rx: Math.max(1, o.rx * factor),
               ry: Math.max(1, o.ry * factor),
+            } as DesignObject;
+          }
+          if (o.type === "text") {
+            return {
+              ...o,
+              fontSize: Math.max(4, o.fontSize * factor),
             } as DesignObject;
           }
           if (o.type === "polygon") {

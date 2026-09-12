@@ -5,6 +5,7 @@ import { formatUnit, UNIT_OPTIONS } from "@/lib/units";
 
 const TOOLS = [
   { id: "select", label: "Select", shortcut: "V" },
+  { id: "text", label: "Text", shortcut: "T" },
   { id: "rect", label: "Rectangle", shortcut: "R" },
   { id: "ellipse", label: "Ellipse", shortcut: "O" },
   { id: "line", label: "Line", shortcut: "L" },

@@ -68,6 +68,14 @@ export type DesignObject =
       content: string;
       fontFamily: string;
       fontSize: number;
+      fontWeight: number;
+      fontStyle: "normal" | "italic";
+      textColor: string;
+      textAlign: "left" | "center" | "right";
+      lineHeight: number;
+      letterSpacing: number;
+      textTransform: "none" | "uppercase" | "lowercase" | "capitalize";
+      convertOutlines: boolean;
     })
   | (CommonObjectProps & {
       type: "image";
@@ -75,6 +83,47 @@ export type DesignObject =
       height: number;
       src: string;
     });
+
+/** Curated open-licence font list for the vector designer. All are Google Fonts
+ *  (SIL Open Font License) — no unlicensed uploads. */
+export const OPEN_LICENSED_FONTS = [
+  { id: 'Inter', label: 'Inter' },
+  { id: 'Roboto', label: 'Roboto' },
+  { id: 'Roboto Mono', label: 'Roboto Mono' },
+  { id: 'Open Sans', label: 'Open Sans' },
+  { id: 'Lato', label: 'Lato' },
+  { id: 'Montserrat', label: 'Montserrat' },
+  { id: 'Poppins', label: 'Poppins' },
+  { id: 'Playfair Display', label: 'Playfair Display' },
+  { id: 'Oswald', label: 'Oswald' },
+  { id: 'Raleway', label: 'Raleway' },
+  { id: 'Nunito', label: 'Nunito' },
+  { id: 'Merriweather', label: 'Merriweather' },
+  { id: 'Source Code Pro', label: 'Source Code Pro' },
+  { id: 'Fira Sans', label: 'Fira Sans' },
+  { id: 'PT Sans', label: 'PT Sans' },
+  { id: 'Ubuntu', label: 'Ubuntu' },
+  { id: 'Rubik', label: 'Rubik' },
+  { id: 'Space Grotesk', label: 'Space Grotesk' },
+  { id: 'Work Sans', label: 'Work Sans' },
+  { id: 'DM Sans', label: 'DM Sans' },
+  { id: 'Crimson Text', label: 'Crimson Text' },
+  { id: 'JetBrains Mono', label: 'JetBrains Mono' },
+  { id: 'Dancing Script', label: 'Dancing Script' },
+  { id: 'Pacifico', label: 'Pacifico' },
+  { id: 'Permanent Marker', label: 'Permanent Marker' },
+] as const;
+
+export type FontFamily = (typeof OPEN_LICENSED_FONTS)[number]['id'];
+
+export type TextAlignment = 'left' | 'center' | 'right';
+export type FontWeightOption = 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900;
+export type FontStyleOption = 'normal' | 'italic';
+export type TextTransformOption = 'none' | 'uppercase' | 'lowercase' | 'capitalize';
+
+/** Google Fonts CSS import URL covering all fonts in OPEN_LICENSED_FONTS. */
+export const GOOGLE_FONTS_URL =
+  'https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Roboto:wght@400;700&family=Roboto+Mono:wght@400;700&family=Open+Sans:wght@400;700&family=Lato:wght@400;700&family=Montserrat:wght@400;700&family=Poppins:wght@400;700&family=Playfair+Display:wght@400;700&family=Oswald:wght@400;700&family=Raleway:wght@400;700&family=Nunito:wght@400;700&family=Merriweather:wght@400;700&family=Source+Code+Pro:wght@400;700&family=Fira+Sans:wght@400;700&family=PT+Sans:wght@400;700&family=Ubuntu:wght@400;700&family=Rubik:wght@400;700&family=Space+Grotesk:wght@400;700&family=Work+Sans:wght@400;700&family=DM+Sans:wght@400;700&family=Crimson+Text:wght@400;700&family=JetBrains+Mono:wght@400;700&family=Dancing+Script:wght@400;700&family=Pacifico&family=Permanent+Marker&display=swap';
 
 /** Bounding box in canvas mm. */
 export interface Bounds {
@@ -94,6 +143,7 @@ export function nextId(prefix = "obj"): string {
  * Compute the bounding box of an object in canvas mm.
  * Accounts for rotation only for rect/ellipse; for others uses a
  * conservative axis-aligned bounding box (good enough for selection handles).
+ * For text, we use a simple heuristic since real metrics aren't available client-side.
  */
 export function getObjectBounds(obj: DesignObject): Bounds {
   switch (obj.type) {
@@ -122,8 +172,20 @@ export function getObjectBounds(obj: DesignObject): Bounds {
       }
       return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
     }
-    case "text":
-      return { x: obj.x, y: obj.y, width: obj.fontSize * obj.content.length * 0.6, height: obj.fontSize };
+    case "text": {
+      // Heuristic: approximate width from content length and font size
+      // In a production app you'd use canvas measureText()
+      const charWidth = obj.fontSize * 0.6;
+      const lines = obj.content.split('\n');
+      const longestLine = lines.reduce((max, l) => Math.max(max, l.length), 0);
+      const lineCount = lines.length;
+      return {
+        x: obj.x,
+        y: obj.y,
+        width: longestLine * charWidth,
+        height: lineCount * obj.fontSize * obj.lineHeight,
+      };
+    }
     case "image":
       return { x: obj.x, y: obj.y, width: obj.width, height: obj.height };
     default:
@@ -135,4 +197,9 @@ export function getObjectBounds(obj: DesignObject): Bounds {
 export function getObjectCenter(obj: DesignObject): { x: number; y: number } {
   const b = getObjectBounds(obj);
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
+}
+
+/** Extract text object properties (convenience for type narrowing). */
+export function isTextObject(obj: DesignObject): obj is Extract<DesignObject, { type: "text" }> {
+  return obj.type === "text";
 }

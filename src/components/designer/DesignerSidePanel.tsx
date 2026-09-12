@@ -2,9 +2,16 @@
 
 import { useDesignerStore } from "@/store/designer";
 import { formatUnit, fromMm, toMm, UNIT_OPTIONS } from "@/lib/units";
-import { type DesignObject, type Fill, getObjectBounds } from "@/lib/designerTypes";
+import { type DesignObject, type Fill, getObjectBounds, OPEN_LICENSED_FONTS } from "@/lib/designerTypes";
 import { colorToCss, formatColorForMode, parseColor } from "@/lib/colorUtils";
 import { useState } from "react";
+import {
+  type FontFamily,
+  type FontWeightOption,
+  type FontStyleOption,
+  type TextAlignment,
+  type TextTransformOption,
+} from "@/lib/designerTypes";
 
 export function DesignerSidePanel() {
   const widthMm = useDesignerStore((s) => s.widthMm);
@@ -587,6 +594,143 @@ function PropertiesPanel({
               className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
             />
           </div>
+        )}
+
+        {/* Text properties */}
+        {obj.type === "text" && (
+          <>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Font</label>
+              <select
+                value={obj.fontFamily}
+                onChange={(e) => updateObject(obj.id, { fontFamily: e.target.value as FontFamily } as any)}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              >
+                {OPEN_LICENSED_FONTS.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">Size</label>
+                <input
+                  type="number"
+                  value={obj.fontSize}
+                  onChange={(e) => updateObject(obj.id, { fontSize: Math.max(4, Number(e.target.value)) } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                  min={4}
+                  max={200}
+                  step={1}
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">Weight</label>
+                <select
+                  value={obj.fontWeight}
+                  onChange={(e) => updateObject(obj.id, { fontWeight: Number(e.target.value) as FontWeightOption } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                >
+                  {[100, 200, 300, 400, 500, 600, 700, 800, 900].map((w) => (
+                    <option key={w} value={w}>{w}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">Style</label>
+                <select
+                  value={obj.fontStyle}
+                  onChange={(e) => updateObject(obj.id, { fontStyle: e.target.value as FontStyleOption } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                >
+                  <option value="normal">Normal</option>
+                  <option value="italic">Italic</option>
+                </select>
+              </div>
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">Align</label>
+                <select
+                  value={obj.textAlign}
+                  onChange={(e) => updateObject(obj.id, { textAlign: e.target.value as TextAlignment } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                >
+                  <option value="left">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                </select>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">LH</label>
+                <input
+                  type="number"
+                  value={obj.lineHeight}
+                  onChange={(e) => updateObject(obj.id, { lineHeight: Math.max(0.5, Number(e.target.value)) } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                  min={0.5}
+                  max={3}
+                  step={0.1}
+                />
+              </div>
+              <div className="flex items-center gap-1">
+                <label className="text-neutral-400">LS</label>
+                <input
+                  type="number"
+                  value={obj.letterSpacing}
+                  onChange={(e) => updateObject(obj.id, { letterSpacing: Number(e.target.value) } as any)}
+                  className="w-full rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+                  min={-2}
+                  max={10}
+                  step={0.1}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Color</label>
+              <input
+                type="color"
+                value={obj.textColor}
+                onChange={(e) => updateObject(obj.id, { textColor: e.target.value } as any)}
+                className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+              />
+              <input
+                type="text"
+                value={obj.textColor}
+                onChange={(e) => {
+                  const c = parseColor(e.target.value);
+                  if (c) updateObject(obj.id, { textColor: c } as any);
+                }}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Transform</label>
+              <select
+                value={obj.textTransform}
+                onChange={(e) => updateObject(obj.id, { textTransform: e.target.value as TextTransformOption } as any)}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              >
+                <option value="none">None</option>
+                <option value="uppercase">UPPERCASE</option>
+                <option value="lowercase">lowercase</option>
+                <option value="capitalize">Capitalize</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={obj.convertOutlines}
+                onChange={(e) => updateObject(obj.id, { convertOutlines: e.target.checked } as any)}
+                className="h-4 w-4 rounded border border-neutral-700"
+              />
+              <label className="text-neutral-300">Convert to outlines on export</label>
+            </div>
+          </>
         )}
 
         {/* Fill opacity */}

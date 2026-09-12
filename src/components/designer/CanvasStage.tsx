@@ -5,6 +5,7 @@ import {
   type DesignObject,
   type Fill,
   getObjectBounds,
+  OPEN_LICENSED_FONTS,
 } from "@/lib/designerTypes";
 import { colorToCss } from "@/lib/colorUtils";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -16,10 +17,10 @@ const ROTATE_HANDLE_OFFSET = 18;
 type HandleId = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
 
 interface DragState {
-  type: "move" | "draw" | "resize" | "rotate";
+  type: "move" | "draw" | "resize" | "rotate" | "text";
   startMmX: number;
   startMmY: number;
-  tool?: "rect" | "ellipse" | "line" | "polygon";
+  tool?: "rect" | "ellipse" | "line" | "polygon" | "text";
   // resize state
   handle?: HandleId;
   aspectLocked?: boolean;
@@ -27,7 +28,7 @@ interface DragState {
   // rotate state
   origRotation?: number;
   center?: { x: number; y: number };
-  // draw state
+  // draw/text state
   currentMmX?: number;
   currentMmY?: number;
 }
@@ -66,6 +67,11 @@ export function CanvasStage({
   const isPanning = useRef(false);
   const lastPan = useRef({ x: 0, y: 0 });
   const dragState = useRef<DragState | null>(null);
+
+  // Inline text editing state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingText, setEditingText] = useState("");
+  const editingRef = useRef<HTMLTextAreaElement>(null);
 
   // Fit zoom
   const [fitZoom, setFitZoom] = useState(1);
@@ -107,6 +113,19 @@ export function CanvasStage({
     [panX, panY, effectiveZoom]
   );
 
+  const mmToScreen = useCallback(
+    (mmX: number, mmY: number) => {
+      const svg = svgRef.current;
+      if (!svg) return { x: 0, y: 0 };
+      const rect = svg.getBoundingClientRect();
+      return {
+        x: rect.left + panX + mmX * effectiveZoom,
+        y: rect.top + panY + mmY * effectiveZoom,
+      };
+    },
+    [panX, panY, effectiveZoom]
+  );
+
   const onWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (zoom === "fit") {
@@ -135,6 +154,9 @@ export function CanvasStage({
   );
 
   const onMouseDown = (e: React.MouseEvent) => {
+    // Don't interfere with editing
+    if (editingId) return;
+
     const mm = screenToMm(e.clientX, e.clientY);
 
     if (e.button === 1 || (e.button === 0 && e.altKey)) {
@@ -145,6 +167,19 @@ export function CanvasStage({
     }
 
     if (e.button !== 0) return;
+
+    // Text tool: start drag-to-size or click-to-place
+    if (activeTool === "text") {
+      dragState.current = {
+        type: "text",
+        startMmX: mm.x,
+        startMmY: mm.y,
+        tool: "text",
+        currentMmX: mm.x,
+        currentMmY: mm.y,
+      };
+      return;
+    }
 
     if (activeTool === "select") {
       const obj = objectAt(mm.x, mm.y);
@@ -167,7 +202,7 @@ export function CanvasStage({
         tool: activeTool as any,
         currentMmX: mm.x,
         currentMmY: mm.y,
-      };
+      }
     }
   };
 
@@ -202,7 +237,7 @@ export function CanvasStage({
       }
     }
 
-    if (ds.type === "draw") {
+    if (ds.type === "draw" || ds.type === "text") {
       ds.currentMmX = mmX;
       ds.currentMmY = mmY;
     }
@@ -249,6 +284,50 @@ export function CanvasStage({
     isPanning.current = false;
 
     const ds = dragState.current;
+
+    // Text tool: create text object
+    if (ds && ds.type === "text" && ds.currentMmX !== undefined && ds.currentMmY !== undefined) {
+      const x1 = ds.startMmX;
+      const y1 = ds.startMmY;
+      const x2 = ds.currentMmX;
+      const y2 = ds.currentMmY;
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+
+      // If dragged more than a threshold, use drag width; otherwise default width
+      const minDrag = 5;
+      const x = Math.min(x1, x2);
+      const y = Math.min(y1, y2);
+      const width = Math.abs(dx) > minDrag ? Math.abs(dx) : 60;
+      const height = Math.abs(dy) > minDrag ? Math.abs(dy) : 20;
+
+      if (width > 2 && height > 2) {
+        const id = addObject({
+          type: "text",
+          x,
+          y,
+          content: "Text",
+          fontFamily: "Inter",
+          fontSize: 12,
+          fontWeight: 400,
+          fontStyle: "normal",
+          textColor: "#000000",
+          textAlign: "left",
+          lineHeight: 1.4,
+          letterSpacing: 0,
+          textTransform: "none",
+          convertOutlines: false,
+        } as any);
+        // Enter editing mode for the new text
+        const obj = useDesignerStore.getState().objects.find((o) => o.id === id);
+        if (obj && obj.type === "text") {
+          setEditingId(id);
+          setEditingText(obj.content);
+        }
+      }
+    }
+
+    // Drawing tools: create shape objects
     if (ds && ds.type === "draw" && ds.currentMmX !== undefined && ds.currentMmY !== undefined) {
       const x1 = ds.startMmX;
       const y1 = ds.startMmY;
@@ -336,6 +415,40 @@ export function CanvasStage({
     dragState.current = null;
   };
 
+  // Double-click to edit text
+  const onDoubleClick = (e: React.MouseEvent) => {
+    if (editingId) return;
+    const mm = screenToMm(e.clientX, e.clientY);
+    const obj = objectAt(mm.x, mm.y);
+    if (obj && obj.type === "text") {
+      selectObject(obj.id);
+      setEditingId(obj.id);
+      setEditingText(obj.content);
+    }
+  };
+
+  // Focus textarea when editing starts
+  useEffect(() => {
+    if (editingId && editingRef.current) {
+      editingRef.current.focus();
+      editingRef.current.select();
+    }
+  }, [editingId]);
+
+  // Commit or cancel editing
+  const commitEdit = () => {
+    if (editingId) {
+      updateObject(editingId, { content: editingText } as any);
+    }
+    setEditingId(null);
+    setEditingText("");
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingText("");
+  };
+
   useEffect(() => {
     if (svgRef.current) onReady?.(svgRef.current);
   }, [onReady]);
@@ -343,6 +456,15 @@ export function CanvasStage({
   // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Don't handle shortcuts while editing (except Escape)
+      if (editingId) {
+        if (e.key === "Escape") {
+          cancelEdit();
+          e.preventDefault();
+        }
+        return;
+      }
+
       if (e.key === "Escape") {
         clearSelection();
         setActiveTool("select");
@@ -352,6 +474,7 @@ export function CanvasStage({
       }
       if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         if (e.key === "v" || e.key === "V") setActiveTool("select");
+        if (e.key === "t" || e.key === "T") setActiveTool("text");
         if (e.key === "r" || e.key === "R") setActiveTool("rect");
         if (e.key === "o" || e.key === "O") setActiveTool("ellipse");
         if (e.key === "l" || e.key === "L") setActiveTool("line");
@@ -369,9 +492,9 @@ export function CanvasStage({
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [clearSelection, setActiveTool, deleteSelected]);
+  }, [clearSelection, setActiveTool, deleteSelected, editingId]);
 
-  // Preview rect while drawing
+  // Preview rect/text while drawing
   const previewObj = (() => {
     const ds = dragState.current;
     if (!ds || ds.type !== "draw" || ds.currentMmX === undefined || ds.currentMmY === undefined) return null;
@@ -448,106 +571,195 @@ export function CanvasStage({
     return null;
   })();
 
+  // Text preview while dragging
+  const previewText = (() => {
+    const ds = dragState.current;
+    if (!ds || ds.type !== "text" || ds.currentMmX === undefined || ds.currentMmY === undefined) return null;
+    const x1 = ds.startMmX;
+    const y1 = ds.startMmY;
+    const x2 = ds.currentMmX;
+    const y2 = ds.currentMmY;
+    const x = Math.min(x1, x2);
+    const y = Math.min(y1, y2);
+    const w = Math.abs(x2 - x1);
+    const h = Math.abs(y2 - y1);
+    if (w < 2 || h < 2) return null;
+    return (
+      <rect
+        x={x}
+        y={y}
+        width={w}
+        height={h}
+        fill="rgba(79,140,255,0.1)"
+        stroke="#4f8cff"
+        strokeWidth={0.5}
+        strokeDasharray="2 2"
+        vectorEffect="non-scaling-stroke"
+      />
+    );
+  })();
+
+  // Compute editing overlay position
+  const editingOverlay = (() => {
+    if (!editingId) return null;
+    const obj = objects.find((o) => o.id === editingId);
+    if (!obj || obj.type !== "text") return null;
+    const screen = mmToScreen(obj.x, obj.y);
+    const b = getObjectBounds(obj);
+    const screenW = b.width * effectiveZoom;
+    const screenH = b.height * effectiveZoom;
+    const fontSize = obj.fontSize * effectiveZoom;
+    return (
+      <div
+        style={{
+          position: "fixed",
+          left: screen.x,
+          top: screen.y,
+          width: Math.max(screenW, 100),
+          height: Math.max(screenH, 40),
+          zIndex: 1000,
+        }}
+      >
+        <textarea
+          ref={editingRef}
+          value={editingText}
+          onChange={(e) => setEditingText(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              cancelEdit();
+              e.stopPropagation();
+            }
+          }}
+          style={{
+            width: "100%",
+            height: "100%",
+            background: "rgba(10, 13, 18, 0.95)",
+            color: obj.textColor,
+            border: "1px solid #3b82f6",
+            borderRadius: 4,
+            padding: 4,
+            fontFamily: obj.fontFamily,
+            fontSize: `${fontSize}px`,
+            fontWeight: obj.fontWeight,
+            fontStyle: obj.fontStyle,
+            textAlign: obj.textAlign,
+            lineHeight: obj.lineHeight,
+            letterSpacing: `${obj.letterSpacing * effectiveZoom}px`,
+            textTransform: obj.textTransform,
+            resize: "none",
+            outline: "none",
+          }}
+        />
+      </div>
+    );
+  })();
+
   const cursor = activeTool === "select" ? "default" : "crosshair";
 
   return (
-    <svg
-      ref={svgRef}
-      className="h-full w-full select-none"
-      style={{ cursor: isPanning.current ? "grabbing" : cursor }}
-      onWheel={onWheel}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp as any}
-      onMouseLeave={onMouseUp as any}
-    >
-      <rect x={0} y={0} width="100%" height="100%" fill="#0a0d12" />
+    <>
+      <svg
+        ref={svgRef}
+        className="h-full w-full select-none"
+        style={{ cursor: isPanning.current ? "grabbing" : cursor }}
+        onWheel={onWheel}
+        onMouseDown={onMouseDown}
+        onMouseMove={onMouseMove}
+        onMouseUp={onMouseUp as any}
+        onMouseLeave={onMouseUp as any}
+        onDoubleClick={onDoubleClick}
+      >
+        <rect x={0} y={0} width="100%" height="100%" fill="#0a0d12" />
 
-      <g transform={`translate(${panX}, ${panY}) scale(${effectiveZoom})`}>
-        {/* Canvas background */}
-        {background.type !== "transparent" && (
-          <rect
-            x={0}
-            y={0}
-            width={widthMm}
-            height={heightMm}
-            fill={
-              background.type === "solid"
-                ? background.color
-                : "url(#canvas-bg-gradient)"
-            }
-            stroke="#3b82f6"
-            strokeWidth={0.5}
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-        {background.type === "transparent" && (
-          <rect
-            x={0}
-            y={0}
-            width={widthMm}
-            height={heightMm}
-            fill="none"
-            stroke="#3b82f6"
-            strokeWidth={0.5}
-            strokeDasharray="4 4"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
-
-        {background.type === "linear-gradient" && (
-          <defs>
-            <linearGradient
-              id="canvas-bg-gradient"
-              x1="0%"
-              y1="0%"
-              x2={`${
-                Math.cos(((background.angle - 90) * Math.PI) / 180) * 50 + 50
-              }%`}
-              y2={`${
-                Math.sin(((background.angle - 90) * Math.PI) / 180) * 50 + 50
-              }%`}
-            >
-              {background.stops.map((s, i) => (
-                <stop key={i} offset={`${s.offset * 100}%`} stopColor={s.color} />
-              ))}
-            </linearGradient>
-          </defs>
-        )}
-
-        {/* Objects */}
-        {objects.map((obj) => (
-          <ObjectRenderer key={obj.id} obj={obj} />
-        ))}
-
-        {/* Drawing preview */}
-        {previewObj}
-
-        {/* Selection handles — render for ALL selected objects */}
-        {selectedIds.map((id) => {
-          const obj = objects.find((o) => o.id === id);
-          if (!obj) return null;
-          return <SelectionHandles key={id} obj={obj} svgRef={svgRef} effectiveZoomRef={effectiveZoomRef} />;
-        })}
-
-        {/* Crosshair */}
-        {mouseMm &&
-          mouseMm.x >= 0 &&
-          mouseMm.x <= widthMm &&
-          mouseMm.y >= 0 &&
-          mouseMm.y <= heightMm && (
-            <g
-              pointerEvents="none"
+        <g transform={`translate(${panX}, ${panY}) scale(${effectiveZoom})`}>
+          {/* Canvas background */}
+          {background.type !== "transparent" && (
+            <rect
+              x={0}
+              y={0}
+              width={widthMm}
+              height={heightMm}
+              fill={
+                background.type === "solid"
+                  ? background.color
+                  : "url(#canvas-bg-gradient)"
+              }
               stroke="#3b82f6"
-              strokeWidth={0.2}
+              strokeWidth={0.5}
               vectorEffect="non-scaling-stroke"
-            >
-              <line x1={mouseMm.x} y1={0} x2={mouseMm.x} y2={heightMm} />
-              <line x1={0} y1={mouseMm.y} x2={widthMm} y2={mouseMm.y} />
-            </g>
+            />
           )}
-      </g>
-    </svg>
+          {background.type === "transparent" && (
+            <rect
+              x={0}
+              y={0}
+              width={widthMm}
+              height={heightMm}
+              fill="none"
+              stroke="#3b82f6"
+              strokeWidth={0.5}
+              strokeDasharray="4 4"
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
+
+          {background.type === "linear-gradient" && (
+            <defs>
+              <linearGradient
+                id="canvas-bg-gradient"
+                x1="0%"
+                y1="0%"
+                x2={`${
+                  Math.cos(((background.angle - 90) * Math.PI) / 180) * 50 + 50
+                }%`}
+                y2={`${
+                  Math.sin(((background.angle - 90) * Math.PI) / 180) * 50 + 50
+                }%`}
+              >
+                {background.stops.map((s, i) => (
+                  <stop key={i} offset={`${s.offset * 100}%`} stopColor={s.color} />
+                ))}
+              </linearGradient>
+            </defs>
+          )}
+
+          {/* Objects */}
+          {objects.map((obj) => (
+            <ObjectRenderer key={obj.id} obj={obj} />
+          ))}
+
+          {/* Drawing preview */}
+          {previewObj}
+          {previewText}
+
+          {/* Selection handles — render for ALL selected objects */}
+          {selectedIds.map((id) => {
+            const obj = objects.find((o) => o.id === id);
+            if (!obj) return null;
+            return <SelectionHandles key={id} obj={obj} svgRef={svgRef} effectiveZoomRef={effectiveZoomRef} />;
+          })}
+
+          {/* Crosshair */}
+          {mouseMm &&
+            mouseMm.x >= 0 &&
+            mouseMm.x <= widthMm &&
+            mouseMm.y >= 0 &&
+            mouseMm.y <= heightMm && (
+              <g
+                pointerEvents="none"
+                stroke="#3b82f6"
+                strokeWidth={0.2}
+                vectorEffect="non-scaling-stroke"
+              >
+                <line x1={mouseMm.x} y1={0} x2={mouseMm.x} y2={heightMm} />
+                <line x1={0} y1={mouseMm.y} x2={widthMm} y2={mouseMm.y} />
+              </g>
+            )}
+        </g>
+      </svg>
+      {editingOverlay}
+    </>
   );
 }
 
@@ -689,20 +901,44 @@ function ObjectRenderer({ obj }: { obj: DesignObject }) {
       );
     }
 
-    case "text":
+    case "text": {
+      const textColor = obj.textColor || "#000000";
+      const textFill = colorToCss(textColor, obj.fillOpacity);
+      const lines = obj.content.split("\n");
+      const lineHeightMm = obj.fontSize * obj.lineHeight;
+      const anchor = obj.textAlign === "center" ? "middle" : obj.textAlign === "right" ? "end" : "start";
+      const xPos = obj.textAlign === "center" ? obj.x + (getObjectBounds(obj).width / 2) : obj.textAlign === "right" ? obj.x + getObjectBounds(obj).width : obj.x;
+
       return (
-        <text
-          x={obj.x}
-          y={obj.y}
-          fontFamily={obj.fontFamily}
-          fontSize={obj.fontSize}
-          fill={fillCss}
-          dominantBaseline="hanging"
-          transform={transform}
-        >
-          {obj.content}
-        </text>
+        <g transform={transform}>
+          {obj.fill.type === "linear-gradient" && (
+            <GradientDef id={`grad-${obj.id}`} fill={obj.fill} />
+          )}
+          <text
+            x={xPos}
+            y={obj.y}
+            fontFamily={`"${obj.fontFamily}", sans-serif`}
+            fontSize={obj.fontSize}
+            fontWeight={obj.fontWeight}
+            fontStyle={obj.fontStyle}
+            fill={textFill}
+            dominantBaseline="hanging"
+            textAnchor={anchor}
+            letterSpacing={obj.letterSpacing}
+          >
+            {lines.map((line, i) => (
+              <tspan
+                key={i}
+                x={xPos}
+                dy={i === 0 ? 0 : lineHeightMm}
+              >
+                {line || " "}
+              </tspan>
+            ))}
+          </text>
+        </g>
       );
+    }
 
     case "image":
       return (
@@ -792,6 +1028,15 @@ function SelectionHandles({ obj, svgRef, effectiveZoomRef }: { obj: DesignObject
           y: newBounds.y + newBounds.h / 2,
           rx: Math.max(1, newBounds.w / 2),
           ry: Math.max(1, newBounds.h / 2),
+        } as any);
+      } else if (obj.type === "text") {
+        // For text, resize changes fontSize proportionally
+        const scale = newBounds.h / b.height;
+        const newSize = Math.max(4, obj.fontSize * scale);
+        liveUpdateObject(obj.id, {
+          x: newBounds.x,
+          y: newBounds.y,
+          fontSize: newSize,
         } as any);
       }
     };
