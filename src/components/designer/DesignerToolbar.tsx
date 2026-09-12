@@ -10,6 +10,7 @@ const TOOLS = [
   { id: "ellipse", label: "Ellipse", shortcut: "O" },
   { id: "line", label: "Line", shortcut: "L" },
   { id: "polygon", label: "Polygon", shortcut: "P" },
+  { id: "image", label: "Image", shortcut: "I" },
 ] as const;
 
 export function DesignerToolbar() {

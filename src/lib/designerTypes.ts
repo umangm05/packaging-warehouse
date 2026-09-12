@@ -82,7 +82,24 @@ export type DesignObject =
       width: number;
       height: number;
       src: string;
+      /** How the image fills its bounds when aspect ratio doesn't match. */
+      imageFit: ImageFit;
+      /** Clipping mask applied to the rendered image. */
+      maskType: MaskType;
+      /** True when source is SVG (rendered as vector, never rasterised). */
+      isSvg: boolean;
+      /** Source pixel dimensions — used for aspect-lock and resolution readout. */
+      naturalWidth: number;
+      naturalHeight: number;
+      /** Crop rectangle in source-pixel coords (null = full image). */
+      crop: { x: number; y: number; width: number; height: number } | null;
     });
+
+/** How an image fits within its bounding box when aspect ratios differ. */
+export type ImageFit = "contain" | "cover" | "stretch";
+
+/** Clipping mask shape applied to an image. */
+export type MaskType = "none" | "rect" | "ellipse";
 
 /** Curated open-licence font list for the vector designer. All are Google Fonts
  *  (SIL Open Font License) — no unlicensed uploads. */

@@ -596,6 +596,43 @@ function PropertiesPanel({
           </div>
         )}
 
+        {/* Image properties */}
+        {obj.type === "image" && (
+          <>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Fit</label>
+              <select
+                value={obj.imageFit}
+                onChange={(e) => updateObject(obj.id, { imageFit: e.target.value as "contain" | "cover" | "stretch" } as any)}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              >
+                <option value="contain">Contain</option>
+                <option value="cover">Cover</option>
+                <option value="stretch">Stretch</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Mask</label>
+              <select
+                value={obj.maskType}
+                onChange={(e) => updateObject(obj.id, { maskType: e.target.value as "none" | "rect" | "ellipse" } as any)}
+                className="flex-1 rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-neutral-200"
+              >
+                <option value="none">None</option>
+                <option value="rect">Rectangle</option>
+                <option value="ellipse">Ellipse</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="w-12 text-neutral-400">Src px</label>
+              <div className="flex-1 text-xs text-neutral-400 font-mono">
+                {obj.naturalWidth}×{obj.naturalHeight}
+                {obj.isSvg && <span className="ml-1 text-amber-400">SVG</span>}
+              </div>
+            </div>
+          </>
+        )}
+
         {/* Text properties */}
         {obj.type === "text" && (
           <>

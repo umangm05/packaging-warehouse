@@ -9,6 +9,14 @@ import {
 } from "@/lib/designerTypes";
 import { colorToCss } from "@/lib/colorUtils";
 import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ACCEPTED_MIME_TYPES,
+  computeDownscale,
+  formatFileSize,
+  isSvgFile,
+  validateFile,
+  type ValidationResult,
+} from "@/lib/fileValidation";
 
 const FIT_PADDING = 40;
 const HANDLE_SIZE = 6;
@@ -72,6 +80,201 @@ export function CanvasStage({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const editingRef = useRef<HTMLTextAreaElement>(null);
+
+  // Image upload state
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [isDecoding, setIsDecoding] = useState(false);
+  const [pendingImage, setPendingImage] = useState<{
+    src: string;
+    naturalWidth: number;
+    naturalHeight: number;
+    isSvg: boolean;
+    fileName: string;
+    fileSize: number;
+  } | null>(null);
+
+  // Handle file selection (shared by drag-drop and file picker)
+  const handleFile = useCallback((file: File | null | undefined) => {
+    if (!file) return;
+    setUploadError(null);
+
+    const validation: ValidationResult = validateFile(file);
+    if (!validation.valid) {
+      setUploadError(validation.error);
+      setIsDecoding(false);
+      return;
+    }
+
+    setIsDecoding(true);
+    const isSvg = isSvgFile(file);
+
+    if (isSvg) {
+      // SVG: read as text, render as vector
+      const reader = new FileReader();
+      reader.onload = () => {
+        const svgText = reader.result as string;
+        // Extract viewBox dimensions for aspect ratio
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(svgText, "image/svg+xml");
+        const svgEl = doc.documentElement;
+        const vb = svgEl.getAttribute("viewBox");
+        let naturalW = 100;
+        let naturalH = 100;
+        if (vb) {
+          const parts = vb.split(/\s+/).map(Number);
+          if (parts.length === 4 && !isNaN(parts[2]) && !isNaN(parts[3])) {
+            naturalW = parts[2];
+            naturalH = parts[3];
+          }
+        }
+        const dataUrl = `data:image/svg+xml;base64,${btoa(svgText)}`;
+        setPendingImage({
+          src: dataUrl,
+          naturalWidth: naturalW,
+          naturalHeight: naturalH,
+          isSvg: true,
+          fileName: file.name,
+          fileSize: file.size,
+        });
+        setIsDecoding(false);
+      };
+      reader.onerror = () => {
+        setUploadError("Failed to read SVG file.");
+        setIsDecoding(false);
+      };
+      reader.readAsText(file);
+    } else {
+      // Raster: decode image to get dimensions
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result as string;
+        const img = new Image();
+        let cancelled = false;
+        const cleanup = () => {
+          cancelled = true;
+        };
+        img.onload = () => {
+          if (cancelled) return;
+          // Downscale large images before placing
+          const scaled = computeDownscale(img.naturalWidth, img.naturalHeight);
+          // If downscaling needed, draw to canvas and re-export
+          if (scaled.width !== img.naturalWidth || scaled.height !== img.naturalHeight) {
+            const canvas = document.createElement("canvas");
+            canvas.width = scaled.width;
+            canvas.height = scaled.height;
+            const ctx = canvas.getContext("2d")!;
+            ctx.drawImage(img, 0, 0, scaled.width, scaled.height);
+            const downscaledUrl = canvas.toDataURL("image/png");
+            setPendingImage({
+              src: downscaledUrl,
+              naturalWidth: scaled.width,
+              naturalHeight: scaled.height,
+              isSvg: false,
+              fileName: file.name,
+              fileSize: file.size,
+            });
+          } else {
+            setPendingImage({
+              src: dataUrl,
+              naturalWidth: img.naturalWidth,
+              naturalHeight: img.naturalHeight,
+              isSvg: false,
+              fileName: file.name,
+              fileSize: file.size,
+            });
+          }
+          setIsDecoding(false);
+        };
+        img.onerror = () => {
+          setUploadError("Failed to decode image file.");
+          setIsDecoding(false);
+        };
+        img.src = dataUrl;
+        // Store cleanup ref (not used beyond this)
+        void cleanup;
+      };
+      reader.onerror = () => {
+        setUploadError("Failed to read image file.");
+        setIsDecoding(false);
+      };
+      reader.readAsDataURL(file);
+    }
+  }, []);
+
+  // Drag-drop handlers
+  const onDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+  const onDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+  const onDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    handleFile(e.dataTransfer.files?.[0]);
+  };
+
+  // File picker
+  const onFilePickerChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    handleFile(e.target.files?.[0]);
+    e.target.value = ""; // allow re-selecting same file
+  };
+
+  // Place pending image on canvas
+  const placePendingImage = useCallback(
+    (mmX: number, mmY: number) => {
+      if (!pendingImage) return;
+      // Default size: fit within canvas at natural aspect ratio
+      const maxPlaceW = 80; // mm
+      const aspect = pendingImage.naturalHeight / pendingImage.naturalWidth;
+      let placeW = maxPlaceW;
+      let placeH = maxPlaceW * aspect;
+      // If taller than wide, cap height instead
+      if (placeH > 80) {
+        placeH = 80;
+        placeW = 80 / aspect;
+      }
+      const id = addObject({
+        type: "image",
+        x: mmX - placeW / 2,
+        y: mmY - placeH / 2,
+        width: placeW,
+        height: placeH,
+        rotation: 0,
+        fill: { type: "solid", color: "#ffffff" },
+        fillOpacity: 1,
+        stroke: "transparent",
+        strokeWidth: 0,
+        visible: true,
+        locked: false,
+        src: pendingImage.src,
+        imageFit: "contain",
+        maskType: "none",
+        isSvg: pendingImage.isSvg,
+        naturalWidth: pendingImage.naturalWidth,
+        naturalHeight: pendingImage.naturalHeight,
+        crop: null,
+      } as any);
+      setPendingImage(null);
+      // Stay in select tool so user can immediately transform
+      setActiveTool("select");
+      // Select the newly placed image
+      useDesignerStore.getState().selectObject(id);
+    },
+    [pendingImage, addObject, setActiveTool]
+  );
 
   // Fit zoom
   const [fitZoom, setFitZoom] = useState(1);
@@ -181,6 +384,16 @@ export function CanvasStage({
       return;
     }
 
+    // Image tool: place pending image or trigger file picker
+    if (activeTool === "image") {
+      if (pendingImage) {
+        placePendingImage(mm.x, mm.y);
+      } else {
+        fileInputRef.current?.click();
+      }
+      return;
+    }
+
     if (activeTool === "select") {
       const obj = objectAt(mm.x, mm.y);
       if (obj) {
@@ -262,6 +475,13 @@ export function CanvasStage({
               y: newBounds.y + newBounds.h / 2,
               rx: Math.max(1, newBounds.w / 2),
               ry: Math.max(1, newBounds.h / 2),
+            } as any);
+          } else if (obj.type === "image") {
+            updateObject(primaryId, {
+              x: newBounds.x,
+              y: newBounds.y,
+              width: newBounds.w,
+              height: newBounds.h,
             } as any);
           }
         }
@@ -479,6 +699,7 @@ export function CanvasStage({
         if (e.key === "o" || e.key === "O") setActiveTool("ellipse");
         if (e.key === "l" || e.key === "L") setActiveTool("line");
         if (e.key === "p" || e.key === "P") setActiveTool("polygon");
+        if (e.key === "i" || e.key === "I") setActiveTool("image");
       }
       if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
         if (e.shiftKey) useDesignerStore.getState().redo();
@@ -659,9 +880,20 @@ export function CanvasStage({
 
   return (
     <>
+      {/* Hidden file input — triggered by image tool */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_MIME_TYPES.join(",")}
+        onChange={onFilePickerChange}
+        className="hidden"
+        aria-label="Upload image"
+        style={{ position: "absolute", left: -9999 }}
+      />
+
       <svg
         ref={svgRef}
-        className="h-full w-full select-none"
+        className={`h-full w-full select-none ${isDragging ? "ring-2 ring-amber-400 ring-inset" : ""}`}
         style={{ cursor: isPanning.current ? "grabbing" : cursor }}
         onWheel={onWheel}
         onMouseDown={onMouseDown}
@@ -669,6 +901,10 @@ export function CanvasStage({
         onMouseUp={onMouseUp as any}
         onMouseLeave={onMouseUp as any}
         onDoubleClick={onDoubleClick}
+        onDragEnter={onDragEnter}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
       >
         <rect x={0} y={0} width="100%" height="100%" fill="#0a0d12" />
 
@@ -758,6 +994,70 @@ export function CanvasStage({
             )}
         </g>
       </svg>
+
+      {/* Image upload overlay */}
+      {(activeTool === "image" || pendingImage || uploadError || isDecoding) && (
+        <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="pointer-events-auto max-w-sm rounded-lg border border-neutral-700 bg-neutral-900/95 p-6 text-center shadow-2xl">
+            {isDecoding ? (
+              <>
+                <div className="mb-3 inline-block h-6 w-6 animate-spin rounded-full border-2 border-amber-400 border-t-transparent" />
+                <div className="text-sm text-neutral-200">Decoding image…</div>
+                <div className="mt-1 text-xs text-neutral-500">
+                  Large images are downscaled automatically
+                </div>
+              </>
+            ) : uploadError ? (
+              <>
+                <div className="mb-3 text-2xl">⚠</div>
+                <div className="text-sm font-medium text-red-400">Upload error</div>
+                <div className="mt-1 text-xs text-neutral-400">{uploadError}</div>
+                <div className="mt-3 text-[11px] text-neutral-500">
+                  Accepted: PNG, JPG, WebP, GIF, SVG ≤ 50 MB
+                </div>
+              </>
+            ) : pendingImage ? (
+              <>
+                <div className="mb-3 text-xs font-medium text-amber-400">
+                  {pendingImage.isSvg ? "SVG (vector)" : "Image"} ready — click to place
+                </div>
+                <div className="mb-1 text-sm text-neutral-200">
+                  {pendingImage.naturalWidth} × {pendingImage.naturalHeight} px
+                  {pendingImage.isSvg ? " (vector)" : " (raster)"}
+                </div>
+                <div className="text-xs text-neutral-500">
+                  {pendingImage.fileName} · {formatFileSize(pendingImage.fileSize)}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <button
+                    onClick={() => setPendingImage(null)}
+                    className="flex-1 rounded bg-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-600"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="flex-1 rounded bg-neutral-700 px-3 py-1.5 text-xs text-neutral-200 hover:bg-neutral-600"
+                  >
+                    Replace
+                  </button>
+                </div>
+              </>
+            ) : activeTool === "image" ? (
+              <>
+                <div className="mb-3 text-3xl">📁</div>
+                <div className="text-sm font-medium text-neutral-200">
+                  Drop an image or click to upload
+                </div>
+                <div className="mt-1 text-xs text-neutral-500">
+                  PNG, JPG, WebP, GIF, SVG · drag anywhere on canvas
+                </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      )}
+
       {editingOverlay}
     </>
   );
@@ -940,17 +1240,58 @@ function ObjectRenderer({ obj }: { obj: DesignObject }) {
       );
     }
 
-    case "image":
+    case "image": {
+      // Map imageFit to preserveAspectRatio
+      const preserveAspectRatio =
+        obj.imageFit === "stretch"
+          ? "none"
+          : obj.imageFit === "cover"
+          ? "xMidYMid slice"
+          : "xMidYMid meet"; // contain
+
+      // Build clip path for mask
+      const clipId = `clip-${obj.id}`;
+      const needsClip = obj.maskType === "rect" || obj.maskType === "ellipse";
+
       return (
-        <image
-          x={obj.x}
-          y={obj.y}
-          width={obj.width}
-          height={obj.height}
-          href={obj.src}
-          preserveAspectRatio="xMidYMid meet"
-        />
+        <g>
+          {needsClip && (
+            <defs>
+              <clipPath id={clipId}>
+                {obj.maskType === "rect" ? (
+                  <rect
+                    x={obj.x}
+                    y={obj.y}
+                    width={obj.width}
+                    height={obj.height}
+                  />
+                ) : obj.maskType === "ellipse" ? (
+                  <ellipse
+                    cx={obj.x + obj.width / 2}
+                    cy={obj.y + obj.height / 2}
+                    rx={obj.width / 2}
+                    ry={obj.height / 2}
+                  />
+                ) : null}
+              </clipPath>
+            </defs>
+          )}
+          <image
+            x={obj.x}
+            y={obj.y}
+            width={obj.width}
+            height={obj.height}
+            href={obj.src}
+            preserveAspectRatio={preserveAspectRatio}
+            clipPath={needsClip ? `url(#${clipId})` : undefined}
+            // Vector hint: SVG sources render at full resolution regardless of zoom
+            // because the browser re-rasterizes the SVG data URL at each scale.
+            // This is not true DOM inlining, but avoids permanent pixelation.
+            style={obj.isSvg ? { shapeRendering: "geometricPrecision" } : undefined}
+          />
+        </g>
       );
+    }
 
     default:
       return null;
@@ -1037,6 +1378,13 @@ function SelectionHandles({ obj, svgRef, effectiveZoomRef }: { obj: DesignObject
           x: newBounds.x,
           y: newBounds.y,
           fontSize: newSize,
+        } as any);
+      } else if (obj.type === "image") {
+        liveUpdateObject(obj.id, {
+          x: newBounds.x,
+          y: newBounds.y,
+          width: newBounds.w,
+          height: newBounds.h,
         } as any);
       }
     };

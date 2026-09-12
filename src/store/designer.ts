@@ -4,9 +4,14 @@ import { create } from "zustand";
 import {
   type DesignObject,
   type Fill,
+  type ImageFit,
+  type MaskType,
   nextId,
 } from "@/lib/designerTypes";
 import { type Unit } from "@/lib/units";
+
+/** Crop rectangle in source-pixel coords. */
+export type CropRect = { x: number; y: number; width: number; height: number };
 
 export type ZoomMode = "fit" | number;
 
@@ -42,7 +47,7 @@ interface DesignerState {
   redoStack: HistoryEntry[];
 
   // --- active tool ---
-  activeTool: "select" | "rect" | "ellipse" | "line" | "polygon" | "text";
+  activeTool: "select" | "rect" | "ellipse" | "line" | "polygon" | "text" | "image";
 
   // --- document actions ---
   setCanvasSize: (widthMm: number, heightMm: number) => void;
@@ -70,6 +75,11 @@ interface DesignerState {
   selectObject: (id: string | null) => void;
   selectAdd: (id: string) => void;
   clearSelection: () => void;
+
+  // --- image-specific actions ---
+  setImageFit: (id: string, fit: ImageFit) => void;
+  setImageMask: (id: string, mask: MaskType) => void;
+  setImageCrop: (id: string, crop: CropRect | null) => void;
 
   // --- transform actions ---
   moveObject: (id: string, dx: number, dy: number) => void;
@@ -334,8 +344,36 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
             }));
             return { ...o, points } as DesignObject;
           }
+          if (o.type === "image") {
+            return {
+              ...o,
+              width: Math.max(1, o.width * factor),
+              height: Math.max(1, o.height * factor),
+            } as DesignObject;
+          }
           return o;
         }),
+      })),
+
+    setImageFit: (id, imageFit) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id ? ({ ...o, imageFit } as DesignObject) : o
+        ),
+      })),
+
+    setImageMask: (id, maskType) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id ? ({ ...o, maskType } as DesignObject) : o
+        ),
+      })),
+
+    setImageCrop: (id, crop) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id ? ({ ...o, crop } as DesignObject) : o
+        ),
       })),
 
     renameObject: (id, name) =>
