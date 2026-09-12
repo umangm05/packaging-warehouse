@@ -14,6 +14,7 @@ import {
   recommendedPixels,
   type ImageFileInfo,
 } from "@/lib/fileValidation";
+import { fileKind, prepareFileAsImage, type FileKind } from "@/lib/imageUtils";
 
 function DimField({
   label,
@@ -108,6 +109,8 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
   const [processing, setProcessing] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [imageInfo, setImageInfo] = useState<ImageFileInfo | null>(null);
+  const [fileKindInfo, setFileKindInfo] = useState<FileKind | null>(null);
+  const [pdfPageInfo, setPdfPageInfo] = useState<string | null>(null);
   const pendingSizeRef = useRef<number>(0);
 
   const displayedCrop = face.useOverride ? face.crop : masterCrop;
@@ -118,9 +121,8 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
   const faceMM = [L, W, H, L, W, W][faceIndex];
   const recommendedPx = recommendedPixels(faceMM);
 
-  const handleFile = useCallback(
-    (file: File | null | undefined) => {
-      if (!file) return;
+  const processAndSetFaceImage = useCallback(
+    async (file: File) => {
       const result = validateFile(file);
       if (!result.valid) {
         setFileError(result.error);
@@ -130,12 +132,47 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
       setFileError(null);
       setProcessing(true);
       pendingSizeRef.current = file.size;
-      if (face.image) URL.revokeObjectURL(face.image);
-      const url = URL.createObjectURL(file);
-      setFaceImage(faceIndex, url, file.name);
-      if (!face.useOverride) setFaceOverride(faceIndex, true);
+      try {
+        const prepared = await prepareFileAsImage(file);
+        if (face.image && prepared.fileKind === "image") {
+          // Only revoke object URLs, not data URLs from SVG/PDF.
+          try {
+            URL.revokeObjectURL(face.image);
+          } catch {
+            // ignore — might be a data URL
+          }
+        } else if (face.image) {
+          try {
+            URL.revokeObjectURL(face.image);
+          } catch {
+            // ignore
+          }
+        }
+        setFileKindInfo(prepared.fileKind);
+        if (prepared.fileKind === "pdf" && prepared.pageCount) {
+          setPdfPageInfo(
+            `Page 1 of ${prepared.pageCount} · ${prepared.dpi} DPI raster`,
+          );
+        } else {
+          setPdfPageInfo(null);
+        }
+        setFaceImage(faceIndex, prepared.url, file.name);
+        if (!face.useOverride) setFaceOverride(faceIndex, true);
+      } catch (err) {
+        setFileError(`Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setProcessing(false);
+      }
     },
     [face.image, face.useOverride, faceIndex, setFaceImage, setFaceOverride],
+  );
+
+  const handleFile = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      processAndSetFaceImage(file);
+    },
+    [processAndSetFaceImage],
   );
 
   useEffect(() => {
@@ -247,14 +284,22 @@ function FaceEditor({ faceIndex }: { faceIndex: FaceIndex }) {
             <div className="mb-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
               <span className="font-semibold">⚠ Upload error</span>
               <span>{fileError}</span>
-              <span className="text-red-400/70">Accepted: PNG, JPG, WEBP, GIF, AVIF ≤ 50 MB</span>
+              <span className="text-red-400/70">Accepted: PNG, JPG, SVG, PDF ≤ 50 MB · .psd and .cdr are not supported</span>
             </div>
           )}
 
           {imageInfo && !processing && (
             <div className="mb-2 flex items-center justify-between rounded bg-neutral-800/70 px-2 py-1 text-[10px] text-neutral-400">
               <span>{imageInfo.width} × {imageInfo.height} px</span>
-              <span>{formatFileSize(imageInfo.fileSize)}</span>
+              <div className="flex items-center gap-2">
+                {fileKindInfo === "pdf" && pdfPageInfo && (
+                  <span className="rounded bg-amber-500/20 px-1 text-amber-300">{pdfPageInfo}</span>
+                )}
+                {fileKindInfo === "svg" && (
+                  <span className="rounded bg-emerald-500/20 px-1 text-emerald-300">SVG → rasterised at 2048 px</span>
+                )}
+                <span>{formatFileSize(imageInfo.fileSize)}</span>
+              </div>
             </div>
           )}
 
@@ -376,9 +421,8 @@ export default function Page() {
   const masterFileRef = useRef<HTMLInputElement>(null);
   const masterDragOver = useRef(false);
 
-  const handleMasterFile = useCallback(
-    (file: File | null | undefined) => {
-      if (!file) return;
+  const processAndSetMasterImage = useCallback(
+    async (file: File) => {
       const result = validateFile(file);
       if (!result.valid) {
         setMasterError(result.error);
@@ -388,11 +432,31 @@ export default function Page() {
       setMasterError(null);
       setMasterProcessing(true);
       masterPendingSizeRef.current = file.size;
-      if (masterImage) URL.revokeObjectURL(masterImage);
-      const url = URL.createObjectURL(file);
-      setMasterImage(url, file.name);
+      try {
+        const prepared = await prepareFileAsImage(file);
+        if (masterImage) {
+          try {
+            URL.revokeObjectURL(masterImage);
+          } catch {
+            // ignore
+          }
+        }
+        setMasterImage(prepared.url, file.name);
+      } catch (err) {
+        setMasterError(`Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setMasterProcessing(false);
+      }
     },
     [masterImage, setMasterImage],
+  );
+
+  const handleMasterFile = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      processAndSetMasterImage(file);
+    },
+    [processAndSetMasterImage],
   );
 
   const removeMasterImage = () => {
@@ -562,7 +626,7 @@ export default function Page() {
               <div className="mt-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
                 <span className="font-semibold">⚠ Upload error</span>
                 <span>{masterError}</span>
-                <span className="text-red-400/70">Accepted: PNG, JPG, WEBP, GIF, AVIF ≤ 50 MB</span>
+                <span className="text-red-400/70">Accepted: PNG, JPG, SVG, PDF ≤ 50 MB · .psd and .cdr are not supported</span>
               </div>
             )}
             {masterImage && (
