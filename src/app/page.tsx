@@ -4,6 +4,13 @@ import { useCallback, useRef, useState } from "react";
 import { BoxCanvas } from "@/components/BoxScene";
 import { useBoxStore } from "@/store/box";
 import type { SideStyle } from "@/store/box";
+import {
+  validateFile,
+  formatFileSize,
+  ACCEPT_STRING,
+  recommendedPixels,
+} from "@/lib/fileValidation";
+import { fileKind, prepareFileAsImage, type FileKind } from "@/lib/imageUtils";
 
 function DimField({
   label,
@@ -57,25 +64,75 @@ export default function Page() {
 
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [imageInfo, setImageInfo] = useState<{ width: number; height: number; fileSize: number } | null>(null);
+  const [fileKindInfo, setFileKindInfo] = useState<FileKind | null>(null);
+  const [pdfPageInfo, setPdfPageInfo] = useState<string | null>(null);
+  const [processing, setProcessing] = useState(false);
 
-  const handleFile = useCallback(
-    (file: File | null | undefined) => {
-      if (!file) return;
-      if (!/image\/(png|jpe?g|webp|gif|avif)/i.test(file.type)) {
-        alert("Please drop a PNG, JPG, WEBP or GIF image.");
+  const processFile = useCallback(
+    async (file: File) => {
+      setFileError(null);
+      setProcessing(true);
+
+      const result = validateFile(file);
+      if (!result.valid) {
+        setFileError(result.error);
+        setProcessing(false);
         return;
       }
-      // revoke any previous object URL
-      if (artworkUrl) URL.revokeObjectURL(artworkUrl);
-      const url = URL.createObjectURL(file);
-      setArtwork(url, file.name);
+
+      try {
+        const prepared = await prepareFileAsImage(file);
+        if (artworkUrl) {
+          try {
+            URL.revokeObjectURL(artworkUrl);
+          } catch {
+            // might be a data URL from SVG/PDF — ignore
+          }
+        }
+        setFileKindInfo(prepared.fileKind);
+        if (prepared.fileKind === "pdf" && prepared.pageCount) {
+          setPdfPageInfo(`Page 1 of ${prepared.pageCount} · ${prepared.dpi} DPI raster`);
+        } else {
+          setPdfPageInfo(null);
+        }
+        setImageInfo({
+          width: prepared.width,
+          height: prepared.height,
+          fileSize: file.size,
+        });
+        setArtwork(prepared.url, file.name);
+      } catch (err) {
+        setFileError(`Could not read file: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        setProcessing(false);
+      }
     },
     [artworkUrl, setArtwork],
   );
 
+  const handleFile = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      processFile(file);
+    },
+    [processFile],
+  );
+
   const removeArtwork = () => {
-    if (artworkUrl) URL.revokeObjectURL(artworkUrl);
+    if (artworkUrl) {
+      try {
+        URL.revokeObjectURL(artworkUrl);
+      } catch {
+        // might be a data URL — ignore
+      }
+    }
     setArtwork(null, null);
+    setImageInfo(null);
+    setFileKindInfo(null);
+    setPdfPageInfo(null);
+    setFileError(null);
   };
 
   const sideOptions: { id: SideStyle; label: string; swatch: string }[] = [
@@ -136,14 +193,21 @@ export default function Page() {
               <input
                 ref={fileRef}
                 type="file"
-                accept="image/png,image/jpeg,image/webp,image/gif"
+                accept={ACCEPT_STRING}
                 className="hidden"
                 onChange={(e) => {
                   handleFile(e.target.files?.[0]);
                   e.target.value = "";
                 }}
               />
-              {artworkUrl ? (
+              {processing && (
+                <div className="flex flex-col items-center gap-1">
+                  <span className="text-2xl">⏳</span>
+                  <span className="font-medium">Processing…</span>
+                </div>
+              )}
+
+              {!processing && artworkUrl ? (
                 <div className="flex flex-col items-center gap-1">
                   <img
                     src={artworkUrl}
@@ -153,6 +217,18 @@ export default function Page() {
                   <span className="max-w-full truncate text-xs text-neutral-300">
                     {artworkName}
                   </span>
+                  {imageInfo && (
+                    <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+                      <span>{imageInfo.width} × {imageInfo.height} px</span>
+                      <span>{formatFileSize(imageInfo.fileSize)}</span>
+                      {fileKindInfo === "pdf" && pdfPageInfo && (
+                        <span className="rounded bg-amber-500/20 px-1 text-amber-300">{pdfPageInfo}</span>
+                      )}
+                      {fileKindInfo === "svg" && (
+                        <span className="rounded bg-blue-500/20 px-1 text-blue-300">SVG raster</span>
+                      )}
+                    </div>
+                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -163,14 +239,22 @@ export default function Page() {
                     Remove
                   </button>
                 </div>
-              ) : (
+              ) : !processing && (
                 <>
                   <span className="text-2xl">🖼️</span>
                   <span className="font-medium">Drop a logo / image here</span>
-                  <span className="text-xs text-neutral-500">or click to browse · PNG / JPG / WEBP</span>
+                  <span className="text-xs text-neutral-500">or click to browse · PNG / JPG / SVG / PDF</span>
                 </>
               )}
             </div>
+
+            {fileError && (
+              <div className="mt-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
+                <span className="font-semibold">⚠ Upload error</span>
+                <span>{fileError}</span>
+                <span className="text-red-400/70">Accepted: PNG, JPG, SVG, PDF ≤ 50 MB · .psd and .cdr are not supported</span>
+              </div>
+            )}
           </div>
 
           {/* dimensions */}

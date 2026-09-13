@@ -6,25 +6,40 @@
  * path-dependent validation is a real bug (one path rejects, the other
  * silently accepts).
  *
- * Supports: PNG, JPG, WebP, GIF, SVG.
+ * Supports: PNG, JPG, SVG, PDF (plus WebP, GIF).
+ * Explicitly rejects: .psd, .cdr (proprietary — user exports SVG/PDF).
  */
 
 export const ACCEPTED_MIME_TYPES = [
   "image/png",
   "image/jpeg",
+  "image/svg+xml",
+  "application/pdf",
   "image/webp",
   "image/gif",
-  "image/svg+xml",
 ] as const;
 
 export const ACCEPTED_EXTENSIONS = [
   ".png",
   ".jpg",
   ".jpeg",
+  ".svg",
+  ".pdf",
   ".webp",
   ".gif",
-  ".svg",
 ] as const;
+
+/**
+ * Rejected proprietary formats — detected by extension BEFORE the generic
+ * extension check so we can return a helpful message naming the supported
+ * alternatives instead of a generic "unsupported" error.
+ */
+export const REJECTED_FORMATS: Record<string, { name: string; exportHint: string }> = {
+  ".psd": { name: "Adobe Photoshop (PSD)", exportHint: "export as PNG or PDF from Photoshop" },
+  ".cdr": { name: "CorelDraw (CDR)", exportHint: "export as SVG or PDF from CorelDraw" },
+};
+
+export const SUPPORTED_FORMATS_LIST = "PNG, JPG, SVG, PDF";
 
 /** 50 MB limit for raster uploads. SVG is text-based, no practical limit needed. */
 export const FILE_SIZE_LIMIT_BYTES = 50 * 1024 * 1024;
@@ -45,53 +60,49 @@ export function isSvgFile(file: File): boolean {
 }
 
 /**
- * Validate an upload before decoding.
- *
- * - MIME type or extension must be in the accepted list.
- * - Raster files must be under 50 MB and non-empty.
- * - SVG files skip the size limit (they're XML text, not pixels).
+ * Validate a file for upload. Checks rejected proprietary formats first
+ * (so the user gets a helpful "export as…" message), then MIME type
+ * (with extension fallback), then size limit.
+ * Used by BOTH the drop handler and the file-picker change handler
+ * so behavior is identical across every input path.
  */
 export function validateFile(file: File): ValidationResult {
-  if (file.size === 0) {
-    return { valid: false, error: "File is empty." };
+  const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
+
+  // Check rejected proprietary formats first — give a helpful message.
+  const rejected = REJECTED_FORMATS[ext];
+  if (rejected) {
+    return {
+      valid: false,
+      error: `Cannot import ${rejected.name} files. Please ${rejected.exportHint}. Supported formats: ${SUPPORTED_FORMATS_LIST}.`,
+    };
   }
 
-  // SVG is text-based — no pixel size limit needed
-  const isSvg = isSvgFile(file);
-
-  if (!isSvg) {
-    if (file.size > FILE_SIZE_LIMIT_BYTES) {
+  if (file.type) {
+    if (!ACCEPTED_MIME_TYPES.includes(file.type as (typeof ACCEPTED_MIME_TYPES)[number])) {
       return {
         valid: false,
-        error: `File too large: ${formatFileSize(file.size)}. Maximum: 50 MB.`,
+        error: `Unsupported type "${file.type}". Accepted: ${SUPPORTED_FORMATS_LIST} (max ${formatFileSize(FILE_SIZE_LIMIT_BYTES)}).`,
       };
-    }
-    // Check MIME type or extension for raster
-    if (file.type) {
-      if (!ACCEPTED_MIME_TYPES.includes(file.type as any)) {
-        return {
-          valid: false,
-          error: `Unsupported type "${file.type}". Accepted: PNG, JPG, WebP, GIF, SVG.`,
-        };
-      }
-    } else {
-      const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
-      if (!ext || !ACCEPTED_EXTENSIONS.includes(ext as any)) {
-        return {
-          valid: false,
-          error: `Unsupported extension "${ext}". Accepted: .png, .jpg, .webp, .gif, .svg.`,
-        };
-      }
     }
   } else {
-    // SVG — still validate extension matches
-    const ext = file.name.toLowerCase().slice(file.name.lastIndexOf("."));
-    if (ext !== ".svg") {
+    if (!ext || !ACCEPTED_EXTENSIONS.includes(ext as (typeof ACCEPTED_EXTENSIONS)[number])) {
       return {
         valid: false,
-        error: `SVG files must have a .svg extension (got "${ext}").`,
+        error: `Unsupported extension "${ext || "?"}". Accepted: .png, .jpg, .svg, .pdf, .webp, .gif.`,
       };
     }
+  }
+
+  if (file.size > FILE_SIZE_LIMIT_BYTES) {
+    return {
+      valid: false,
+      error: `File too large: ${formatFileSize(file.size)}. Maximum: ${formatFileSize(FILE_SIZE_LIMIT_BYTES)}.`,
+    };
+  }
+
+  if (file.size === 0) {
+    return { valid: false, error: "File is empty." };
   }
 
   return { valid: true, error: null };
@@ -128,4 +139,12 @@ export function computeDownscale(
     width: Math.round(naturalWidth * ratio),
     height: Math.round(naturalHeight * ratio),
   };
+}
+
+/**
+ * Pixel dimension recommended for crisp print at the given DPI.
+ * mm -> inches -> pixels, rounded up.
+ */
+export function recommendedPixels(boxMM: number, dpi = 300): number {
+  return Math.ceil((boxMM / 25.4) * dpi);
 }
