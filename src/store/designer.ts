@@ -11,6 +11,15 @@ import {
   nextId,
 } from "@/lib/designerTypes";
 import { type Unit } from "@/lib/units";
+import {
+  type DesignDocument,
+  type DesignSummary,
+  createDesignDocument,
+  generateDesignId,
+  deserializeDesign,
+  serializeDesign,
+} from "@/lib/designDocument";
+import { localStorageDesignStorage } from "@/lib/designStorage";
 
 /** Crop rectangle in source-pixel coords. */
 export type CropRect = { x: number; y: number; width: number; height: number };
@@ -54,6 +63,11 @@ interface DesignerState {
   // --- crop mode ---
   cropMode: boolean;
   setCropMode: (on: boolean) => void;
+
+  // --- persistence ---
+  currentDesignId: string | null;
+  currentDesignName: string;
+  designs: DesignSummary[];
 
   // --- document actions ---
   setCanvasSize: (widthMm: number, heightMm: number) => void;
@@ -112,6 +126,18 @@ interface DesignerState {
   redo: () => void;
   canUndo: () => boolean;
   canRedo: () => boolean;
+
+  // --- persistence actions ---
+  setCurrentDesignName: (name: string) => void;
+  saveDesign: () => Promise<void>;
+  openDesign: (id: string) => Promise<void>;
+  renameDesign: (id: string, newName: string) => Promise<void>;
+  duplicateDesign: (id: string, newName: string) => Promise<string>;
+  deleteDesign: (id: string) => Promise<void>;
+  newDesign: () => void;
+  refreshDesignList: () => Promise<void>;
+  exportDesign: () => string;
+  importDesign: (json: string) => Promise<void>;
 }
 
 /** Capture the current state into a history entry. */
@@ -131,6 +157,27 @@ function applyEntry(state: DesignerState, entry: HistoryEntry): Partial<Designer
     selectedId: entry.selectedId,
     selectedIds: entry.selectedId ? [entry.selectedId] : [],
     redoStack: [], // applying an entry from redo should clear redo? No — handled by caller
+  };
+}
+
+/** Replace the entire canvas state (used when loading a design). */
+function loadDocumentIntoState(doc: DesignDocument): Partial<DesignerState> {
+  return {
+    widthMm: doc.widthMm,
+    heightMm: doc.heightMm,
+    unit: doc.unit as Unit,
+    dpi: doc.dpi,
+    background: doc.background as Fill,
+    objects: (doc.objects as DesignObject[]).map((o) => ({
+      ...o,
+      fill: { ...(o.fill as object) },
+    })) as DesignObject[],
+    selectedId: null,
+    selectedIds: [],
+    history: [],
+    redoStack: [],
+    currentDesignId: doc.id,
+    currentDesignName: doc.name,
   };
 }
 
@@ -185,6 +232,11 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
 
     activeTool: "select",
     cropMode: false,
+
+    // --- persistence defaults ---
+    currentDesignId: null,
+    currentDesignName: "Untitled",
+    designs: [],
 
     setCanvasSize: (widthMm, heightMm) =>
       set({ widthMm: Math.max(1, widthMm), heightMm: Math.max(1, heightMm) }),
@@ -524,5 +576,117 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
 
     canUndo: () => get().history.length > 0,
     canRedo: () => get().redoStack.length > 0,
+
+    // --- persistence actions ---
+
+    setCurrentDesignName: (name) => set({ currentDesignName: name }),
+
+    saveDesign: async () => {
+      const s = get();
+      const id = s.currentDesignId ?? generateDesignId();
+      const doc = createDesignDocument({
+        id,
+        name: s.currentDesignName || "Untitled",
+        widthMm: s.widthMm,
+        heightMm: s.heightMm,
+        unit: s.unit,
+        dpi: s.dpi,
+        background: s.background,
+        objects: s.objects,
+      });
+      await localStorageDesignStorage.save(doc);
+      set({ currentDesignId: id, currentDesignName: doc.name });
+      // refresh the list
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+    },
+
+    openDesign: async (id) => {
+      const doc = await localStorageDesignStorage.load(id);
+      if (!doc) return;
+      set(loadDocumentIntoState(doc));
+    },
+
+    renameDesign: async (id, newName) => {
+      await localStorageDesignStorage.rename(id, newName);
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+      // update current name if we just renamed the open design
+      if (get().currentDesignId === id) {
+        set({ currentDesignName: newName });
+      }
+    },
+
+    duplicateDesign: async (id, newName) => {
+      const newId = await localStorageDesignStorage.duplicate(id, newName);
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+      return newId;
+    },
+
+    deleteDesign: async (id) => {
+      await localStorageDesignStorage.delete(id);
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+      // if we deleted the current design, reset to a new state
+      if (get().currentDesignId === id) {
+        get().newDesign();
+      }
+    },
+
+    newDesign: () => {
+      set({
+        widthMm: 210,
+        heightMm: 297,
+        unit: "mm",
+        dpi: 300,
+        background: { type: "solid", color: "#ffffff" },
+        objects: [],
+        selectedId: null,
+        selectedIds: [],
+        history: [],
+        redoStack: [],
+        currentDesignId: null,
+        currentDesignName: "Untitled",
+      });
+    },
+
+    refreshDesignList: async () => {
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+    },
+
+    exportDesign: () => {
+      const s = get();
+      const id = s.currentDesignId ?? generateDesignId();
+      const doc = createDesignDocument({
+        id,
+        name: s.currentDesignName || "Untitled",
+        widthMm: s.widthMm,
+        heightMm: s.heightMm,
+        unit: s.unit,
+        dpi: s.dpi,
+        background: s.background,
+        objects: s.objects,
+      });
+      return serializeDesign(doc);
+    },
+
+    importDesign: async (json) => {
+      const doc = deserializeDesign(json);
+      // save the imported doc as a new design (new id to avoid collisions)
+      const newId = generateDesignId();
+      const importedDoc: DesignDocument = {
+        ...doc,
+        id: newId,
+        name: doc.name,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      await localStorageDesignStorage.save(importedDoc);
+      set(loadDocumentIntoState(importedDoc));
+      const designs = await localStorageDesignStorage.list();
+      set({ designs });
+    },
   };
 });

@@ -12,6 +12,8 @@ export function DesignerStatusBar() {
   const zoom = useDesignerStore((s) => s.zoom);
   const objects = useDesignerStore((s) => s.objects);
   const selectedId = useDesignerStore((s) => s.selectedId);
+  const currentDesignName = useDesignerStore((s) => s.currentDesignName);
+  const currentDesignId = useDesignerStore((s) => s.currentDesignId);
 
   const selected = selectedId ? objects.find((o) => o.id === selectedId) : null;
   const bounds = selected ? getObjectBounds(selected) : null;
@@ -34,6 +36,11 @@ export function DesignerStatusBar() {
           <span className="text-amber-400">
             {selected.name} @ {bounds.x.toFixed(1)},{bounds.y.toFixed(1)} — {bounds.width.toFixed(1)}×{bounds.height.toFixed(1)}
             {selected.rotation !== 0 && ` ${selected.rotation.toFixed(0)}°`}
+          </span>
+        )}
+        {currentDesignId && (
+          <span className="text-green-400" title="Design is saved locally">
+            ● saved
           </span>
         )}
       </div>
