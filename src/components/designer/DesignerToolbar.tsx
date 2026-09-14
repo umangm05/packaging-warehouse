@@ -1,7 +1,9 @@
-"use client";
+'use client';
 
-import { useDesignerStore } from "@/store/designer";
-import { formatUnit, UNIT_OPTIONS } from "@/lib/units";
+import { useState } from 'react';
+import { useDesignerStore } from '@/store/designer';
+import { formatUnit, UNIT_OPTIONS } from '@/lib/units';
+import { ExportDialog } from './ExportDialog';
 
 const TOOLS = [
   { id: "select", label: "Select", shortcut: "V" },
@@ -14,6 +16,7 @@ const TOOLS = [
 ] as const;
 
 export function DesignerToolbar() {
+  const [showExport, setShowExport] = useState(false);
   const zoom = useDesignerStore((s) => s.zoom);
   const setZoom = useDesignerStore((s) => s.setZoom);
   const fit = useDesignerStore((s) => s.fit);
@@ -137,7 +140,18 @@ export function DesignerToolbar() {
             className="w-12 bg-transparent text-right text-xs text-neutral-200 outline-none"
           />
         </div>
+
+        {/* Export button */}
+        <button
+          onClick={() => setShowExport(true)}
+          className="rounded-md border border-amber-600 bg-amber-500 px-3 py-1 text-xs font-bold text-neutral-900 hover:bg-amber-400"
+          title="Export design (SVG / PDF / PNG / JPG)"
+        >
+          Export
+        </button>
       </div>
+
+      {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
     </header>
   );
 }
