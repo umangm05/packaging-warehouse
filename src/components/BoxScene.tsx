@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { ContactShadows, Environment, Lightformer, OrbitControls } from "@react-three/drei";
 import * as THREE from "three";
@@ -127,10 +127,27 @@ function Ground() {
   );
 }
 
-export function BoxCanvas() {
+export interface ExportHandle {
+  gl: THREE.WebGLRenderer | null;
+  scene: THREE.Scene | null;
+  camera: THREE.Camera | null;
+}
+
+export const BoxCanvas = forwardRef<ExportHandle>(function BoxCanvas(
+  _props,
+  ref,
+) {
   const L = useBoxStore((s) => s.L);
   const W = useBoxStore((s) => s.W);
   const H = useBoxStore((s) => s.H);
+
+  const internalRef = useRef<ExportHandle>({
+    gl: null,
+    scene: null,
+    camera: null,
+  });
+
+  useImperativeHandle(ref, () => internalRef.current, []);
 
   return (
     <div className="h-full w-full">
@@ -139,9 +156,10 @@ export function BoxCanvas() {
         dpr={[1, 2]}
         gl={{ antialias: true, preserveDrawingBuffer: true }}
         camera={{ fov: 38, position: [260, 180, 380] }}
-        onCreated={({ gl }) => {
+        onCreated={({ gl, scene, camera }) => {
           gl.toneMapping = THREE.ACESFilmicToneMapping;
           gl.toneMappingExposure = 1.05;
+          internalRef.current = { gl, scene, camera };
         }}
       >
         <color attach="background" args={["#101318"]} />
@@ -193,4 +211,4 @@ export function BoxCanvas() {
       </Canvas>
     </div>
   );
-}
+});

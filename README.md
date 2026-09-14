@@ -78,6 +78,61 @@ npm run dev      # http://localhost:3000/designer
 - 100 × 150 mm canvas renders and reports exact dimensions.
 - Unit switch mm→in→px preserves physical size (round-trip error = 0).
 
+## Export (v1 — PNG + PDF)
+
+The 3D box preview can leave the app as two distinct deliverables:
+
+### PNG — live 3D capture (client/WhatsApp preview)
+Captures the **live 3D canvas** at selectable resolution and background:
+
+| Option | Values |
+|--------|--------|
+| Resolution | `1×` · `2×` · `4×` (multiplier on current canvas buffer) |
+| Background | `transparent` · `studio` (matches `#101318`) · `white` |
+
+- Implemented in [`src/lib/export.ts`](src/lib/export.ts) → `captureLivePNG()`.
+- Temporarily bumps the renderer pixel ratio, renders once, grabs the buffer, restores.
+- Triggered from `BoxScene.tsx`'s `onCreated` callback, which exposes `gl`, `scene`, `camera` to the parent via `useImperativeHandle`.
+
+### PDF — front face at physical dimensions (print brief)
+Produces a **print-shaped PDF** whose page size equals the box's front face (L × H mm):
+
+| Option | Values |
+|--------|--------|
+| DPI | `150` · `300` |
+
+- Front face pixel size: `(L × DPI / 25.4) × (H × DPI / 25.4)`.
+- Page size in PDF points: `(L × 72/25.4) × (H × 72/25.4)`.
+- Implemented in [`src/lib/export.ts`](src/lib/export.ts) → `drawFrontCanvas()` + `generatePDF()` (pdf-lib).
+- Artwork is cover-fitted onto the front face before embedding.
+
+### Deterministic filename
+```
+box-L{l}xW{w}xH{h}-{ISO-timestamp}.{ext}
+# e.g. box-L240xW160xH90-2026-09-12T08-44-16.pdf
+```
+
+### UI
+The **Export** section in the right sidebar (`src/app/page.tsx`) provides:
+- Format toggle (PNG / PDF)
+- Format-specific options (resolution + background / DPI)
+- Download button with deterministic filename
+
+### Verification
+```bash
+npm run build    # must pass clean
+# Open http://localhost:3000 → click "Download PNG" / "Download PDF"
+```
+
+Evidence artifacts committed under `test-artifacts/`:
+- `box-L240xW160xH90-sample.png` — front face at 150 DPI (1417 × 531 px)
+- `box-L240xW160xH90-sample.pdf` — page = 680.31 × 255.12 pt (= 240 × 90 mm)
+- `box-L240xW160xH90-2026-09-12T08-44-16.pdf` — browser-exported PDF (verified 240 × 90 mm)
+- `live-box-snapshot.png` — browser-exported live 3D capture (960 × 584 px)
+
+> **Scope guard (v1):** Shareable link is deferred to v2. Import formats (SVG, AI, etc.)
+> are a separate task (`PKG3D-V1-IMPORT-20260912`). This task covers export only.
+
 ## Architecture notes
 
 The core reusable asset is the **dieline layout** in [`src/lib/box.ts`](src/lib/box.ts):

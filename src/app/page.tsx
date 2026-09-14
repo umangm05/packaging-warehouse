@@ -1,52 +1,78 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
-import { BoxCanvas } from "@/components/BoxScene";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { BoxCanvas, type ExportHandle } from "@/components/BoxScene";
 import { useBoxStore } from "@/store/box";
 import type { SideStyle } from "@/store/box";
+import { computeLayout } from "@/lib/box";
 import {
-  validateFile,
-  formatFileSize,
-  ACCEPT_STRING,
-  recommendedPixels,
-} from "@/lib/fileValidation";
-import { fileKind, prepareFileAsImage, type FileKind } from "@/lib/imageUtils";
+  captureLivePNG,
+  downloadBytes,
+  downloadDataUrl,
+  drawFrontCanvas,
+  generatePDF,
+  makeFilename,
+} from "@/lib/boxExport";
+import type { ExportFormat, PDFOptions, PNGBackground, PNGOptions } from "@/lib/boxExport";
+import { useDimInput } from "@/hooks/useDimInput";
+import { DIM_LIMITS, type DimKey } from "@/lib/dimValidation";
 
 function DimField({
   label,
   value,
-  min,
-  max,
+  dimKey,
   onChange,
 }: {
   label: string;
   value: number;
-  min: number;
-  max: number;
+  dimKey: DimKey;
   onChange: (v: number) => void;
 }) {
+  const { text, error, onTextBlur, onTextKeyDown, onSliderChange, setText } =
+    useDimInput(value, onChange, dimKey);
+  const limits = DIM_LIMITS[dimKey];
+
   return (
-    <label className="flex items-center gap-2 text-sm">
-      <span className="w-6 font-semibold text-neutral-400">{label}</span>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1 accent-amber-500"
-      />
-      <input
-        type="number"
-        value={value}
-        min={min}
-        max={max}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="w-16 rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-right text-sm text-neutral-100"
-      />
-      <span className="w-8 text-xs text-neutral-500">mm</span>
+    <label className="flex flex-col gap-1 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="w-6 font-semibold text-neutral-400">{label}</span>
+        <input
+          type="range"
+          min={limits.min}
+          max={limits.max}
+          value={value}
+          onChange={(e) => onSliderChange(e.target.value)}
+          className="flex-1 accent-amber-500"
+        />
+        <input
+          type="number"
+          value={text}
+          min={limits.min}
+          max={limits.max}
+          step={1}
+          data-dim-key={dimKey}
+          onChange={(e) => setText(e.target.value)}
+          onBlur={onTextBlur}
+          onKeyDown={onTextKeyDown}
+          className={`w-16 rounded border bg-neutral-800 px-2 py-0.5 text-right text-sm text-neutral-100 ${
+            error ? "border-red-500" : "border-neutral-700"
+          }`}
+        />
+        <span className="w-8 text-xs text-neutral-500">mm</span>
+      </div>
+      {error && <span className="text-[11px] text-red-400">{error}</span>}
     </label>
   );
+}
+
+function loadImage(url: string | null): Promise<HTMLImageElement | null> {
+  if (!url) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
 }
 
 export default function Page() {
@@ -62,77 +88,35 @@ export default function Page() {
   const setShowGuides = useBoxStore((s) => s.setShowGuides);
   const setArtwork = useBoxStore((s) => s.setArtwork);
 
+  // --- export state ---
+  const exportRef = useRef<ExportHandle>(null);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>("png");
+  const [pngScale, setPngScale] = useState<1 | 2 | 4>(2);
+  const [pngBg, setPngBg] = useState<PNGBackground>("studio");
+  const [pdfDpi, setPdfDpi] = useState<150 | 300>(150);
+  const [exporting, setExporting] = useState(false);
+
   const fileRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
-  const [fileError, setFileError] = useState<string | null>(null);
-  const [imageInfo, setImageInfo] = useState<{ width: number; height: number; fileSize: number } | null>(null);
-  const [fileKindInfo, setFileKindInfo] = useState<FileKind | null>(null);
-  const [pdfPageInfo, setPdfPageInfo] = useState<string | null>(null);
-  const [processing, setProcessing] = useState(false);
-
-  const processFile = useCallback(
-    async (file: File) => {
-      setFileError(null);
-      setProcessing(true);
-
-      const result = validateFile(file);
-      if (!result.valid) {
-        setFileError(result.error);
-        setProcessing(false);
-        return;
-      }
-
-      try {
-        const prepared = await prepareFileAsImage(file);
-        if (artworkUrl) {
-          try {
-            URL.revokeObjectURL(artworkUrl);
-          } catch {
-            // might be a data URL from SVG/PDF — ignore
-          }
-        }
-        setFileKindInfo(prepared.fileKind);
-        if (prepared.fileKind === "pdf" && prepared.pageCount) {
-          setPdfPageInfo(`Page 1 of ${prepared.pageCount} · ${prepared.dpi} DPI raster`);
-        } else {
-          setPdfPageInfo(null);
-        }
-        setImageInfo({
-          width: prepared.width,
-          height: prepared.height,
-          fileSize: file.size,
-        });
-        setArtwork(prepared.url, file.name);
-      } catch (err) {
-        setFileError(`Could not read file: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        setProcessing(false);
-      }
-    },
-    [artworkUrl, setArtwork],
-  );
 
   const handleFile = useCallback(
     (file: File | null | undefined) => {
       if (!file) return;
-      processFile(file);
+      if (!/image\/(png|jpe?g|webp|gif|avif)/i.test(file.type)) {
+        alert("Please drop a PNG, JPG, WEBP or GIF image.");
+        return;
+      }
+      // revoke any previous object URL
+      if (artworkUrl) URL.revokeObjectURL(artworkUrl);
+      const url = URL.createObjectURL(file);
+      setArtwork(url, file.name);
     },
-    [processFile],
+    [artworkUrl, setArtwork],
   );
 
   const removeArtwork = () => {
-    if (artworkUrl) {
-      try {
-        URL.revokeObjectURL(artworkUrl);
-      } catch {
-        // might be a data URL — ignore
-      }
-    }
+    if (artworkUrl) URL.revokeObjectURL(artworkUrl);
     setArtwork(null, null);
-    setImageInfo(null);
-    setFileKindInfo(null);
-    setPdfPageInfo(null);
-    setFileError(null);
   };
 
   const sideOptions: { id: SideStyle; label: string; swatch: string }[] = [
@@ -140,6 +124,37 @@ export default function Page() {
     { id: "white", label: "White", swatch: "#f3efdc" },
     { id: "dark", label: "Dark", swatch: "#c8b893" },
   ];
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      if (exportFormat === "png") {
+        const { gl, scene, camera } = exportRef.current ?? {};
+        if (!gl || !scene || !camera) {
+          alert("Renderer not ready yet.");
+          return;
+        }
+        const opts: PNGOptions = { scale: pngScale, background: pngBg };
+        const dataUrl = captureLivePNG(gl, scene, camera, opts);
+        downloadDataUrl(dataUrl, makeFilename(L, W, H, "png"));
+      } else {
+        // PDF — front face at physical L×H
+        const layout = computeLayout(L, W, H);
+        const pxW = Math.round((L * pdfDpi) / 25.4);
+        const pxH = Math.round((H * pdfDpi) / 25.4);
+        const artImage = await loadImage(artworkUrl);
+        const front = drawFrontCanvas(layout, artImage, pxW, pxH, side);
+        const filename = makeFilename(L, W, H, "pdf");
+        const bytes = await generatePDF(L, H, front, filename);
+        downloadBytes(bytes, filename);
+      }
+    } catch (err) {
+      console.error("Export failed", err);
+      alert(`Export failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setExporting(false);
+    }
+  }
 
   return (
     <main className="flex h-screen w-screen flex-col overflow-hidden bg-neutral-950 font-sans text-neutral-100">
@@ -159,7 +174,7 @@ export default function Page() {
       <div className="flex flex-1 flex-col overflow-hidden md:flex-row">
         {/* 3D viewport */}
         <section className="relative min-h-0 flex-1">
-          <BoxCanvas />
+          <BoxCanvas ref={exportRef} />
           <div className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-[11px] text-neutral-300">
             drag to orbit · scroll to zoom
           </div>
@@ -193,21 +208,14 @@ export default function Page() {
               <input
                 ref={fileRef}
                 type="file"
-                accept={ACCEPT_STRING}
+                accept="image/png,image/jpeg,image/webp,image/gif"
                 className="hidden"
                 onChange={(e) => {
                   handleFile(e.target.files?.[0]);
                   e.target.value = "";
                 }}
               />
-              {processing && (
-                <div className="flex flex-col items-center gap-1">
-                  <span className="text-2xl">⏳</span>
-                  <span className="font-medium">Processing…</span>
-                </div>
-              )}
-
-              {!processing && artworkUrl ? (
+              {artworkUrl ? (
                 <div className="flex flex-col items-center gap-1">
                   <img
                     src={artworkUrl}
@@ -217,18 +225,6 @@ export default function Page() {
                   <span className="max-w-full truncate text-xs text-neutral-300">
                     {artworkName}
                   </span>
-                  {imageInfo && (
-                    <div className="flex items-center gap-2 text-[10px] text-neutral-400">
-                      <span>{imageInfo.width} × {imageInfo.height} px</span>
-                      <span>{formatFileSize(imageInfo.fileSize)}</span>
-                      {fileKindInfo === "pdf" && pdfPageInfo && (
-                        <span className="rounded bg-amber-500/20 px-1 text-amber-300">{pdfPageInfo}</span>
-                      )}
-                      {fileKindInfo === "svg" && (
-                        <span className="rounded bg-blue-500/20 px-1 text-blue-300">SVG raster</span>
-                      )}
-                    </div>
-                  )}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -239,22 +235,14 @@ export default function Page() {
                     Remove
                   </button>
                 </div>
-              ) : !processing && (
+              ) : (
                 <>
                   <span className="text-2xl">🖼️</span>
                   <span className="font-medium">Drop a logo / image here</span>
-                  <span className="text-xs text-neutral-500">or click to browse · PNG / JPG / SVG / PDF</span>
+                  <span className="text-xs text-neutral-500">or click to browse · PNG / JPG / WEBP</span>
                 </>
               )}
             </div>
-
-            {fileError && (
-              <div className="mt-2 flex flex-col gap-1 rounded border border-red-500/60 bg-red-500/10 px-2 py-1.5 text-[10px] text-red-300">
-                <span className="font-semibold">⚠ Upload error</span>
-                <span>{fileError}</span>
-                <span className="text-red-400/70">Accepted: PNG, JPG, SVG, PDF ≤ 50 MB · .psd and .cdr are not supported</span>
-              </div>
-            )}
           </div>
 
           {/* dimensions */}
@@ -263,13 +251,21 @@ export default function Page() {
               Box dimensions
             </h2>
             <div className="flex flex-col gap-2">
-              <DimField label="W" value={L} min={20} max={500} onChange={(v) => setDims({ L: v })} />
-              <DimField label="D" value={W} min={20} max={500} onChange={(v) => setDims({ W: v })} />
-              <DimField label="H" value={H} min={20} max={400} onChange={(v) => setDims({ H: v })} />
+              <DimField label="W" value={L} dimKey="L" onChange={(v) => setDims({ L: v })} />
+              <DimField label="D" value={W} dimKey="W" onChange={(v) => setDims({ W: v })} />
+              <DimField label="H" value={H} dimKey="H" onChange={(v) => setDims({ H: v })} />
             </div>
-            <p className="mt-1 text-[11px] text-neutral-600">
-              Mesh rebuilds &amp; UVs remap in real time.
-            </p>
+            <div className="mt-2 flex items-center justify-between">
+              <p className="text-[11px] text-neutral-600">
+                Mesh rebuilds &amp; UVs remap in real time.
+              </p>
+              <button
+                onClick={() => useBoxStore.getState().resetDims()}
+                className="rounded border border-neutral-700 bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-300 hover:border-amber-500/60 hover:text-amber-200"
+              >
+                Reset
+              </button>
+            </div>
           </div>
 
           {/* side style */}
@@ -296,6 +292,111 @@ export default function Page() {
                 </button>
               ))}
             </div>
+          </div>
+
+          {/* --- EXPORT --- */}
+          <div>
+            <h2 className="mb-2 text-xs font-semibold uppercase tracking-wider text-neutral-500">
+              Export
+            </h2>
+
+            {/* format toggle */}
+            <div className="mb-3 flex gap-2">
+              {(["png", "pdf"] as ExportFormat[]).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setExportFormat(f)}
+                  className={`flex-1 rounded-md border px-2 py-1 text-sm font-medium uppercase tracking-wide transition ${
+                    exportFormat === f
+                      ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                      : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                  }`}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+
+            {/* PNG-specific options */}
+            {exportFormat === "png" && (
+              <div className="flex flex-col gap-3">
+                <div>
+                  <div className="mb-1 text-[11px] text-neutral-500">Resolution</div>
+                  <div className="flex gap-2">
+                    {([1, 2, 4] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setPngScale(s)}
+                        className={`flex-1 rounded border px-2 py-1 text-xs transition ${
+                          pngScale === s
+                            ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                            : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                        }`}
+                      >
+                        {s}×
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-1 text-[11px] text-neutral-500">Background</div>
+                  <div className="flex gap-2">
+                    {(["transparent", "studio", "white"] as PNGBackground[]).map((b) => (
+                      <button
+                        key={b}
+                        onClick={() => setPngBg(b)}
+                        className={`flex-1 rounded border px-2 py-1 text-[11px] capitalize transition ${
+                          pngBg === b
+                            ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                            : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                        }`}
+                      >
+                        {b}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* PDF-specific options */}
+            {exportFormat === "pdf" && (
+              <div>
+                <div className="mb-1 text-[11px] text-neutral-500">Print DPI</div>
+                <div className="flex gap-2">
+                  {([150, 300] as const).map((d) => (
+                    <button
+                      key={d}
+                      onClick={() => setPdfDpi(d)}
+                      className={`flex-1 rounded border px-2 py-1 text-xs transition ${
+                        pdfDpi === d
+                          ? "border-amber-400 bg-amber-400/10 text-amber-200"
+                          : "border-neutral-700 text-neutral-300 hover:border-neutral-500"
+                      }`}
+                    >
+                      {d}
+                    </button>
+                  ))}
+                </div>
+                <p className="mt-2 text-[11px] text-neutral-600">
+                  Page = {L}×{H} mm (front face) · {Math.round((L * pdfDpi) / 25.4)}×{Math.round((H * pdfDpi) / 25.4)} px
+                </p>
+              </div>
+            )}
+
+            {/* export button */}
+            <button
+              onClick={handleExport}
+              disabled={exporting}
+              className="mt-3 w-full rounded-md bg-amber-500 px-3 py-2 text-sm font-semibold text-neutral-950 transition hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {exporting ? "Exporting…" : `Download ${exportFormat.toUpperCase()}`}
+            </button>
+            <p className="mt-1 text-[11px] text-neutral-600">
+              {exportFormat === "png"
+                ? "Captures the live 3D view."
+                : "Print-shaped PDF at the box's physical front dimensions."}
+            </p>
           </div>
 
           {/* guides toggle */}

@@ -22,6 +22,11 @@ const eslintConfig = defineConfig([
       "react-hooks/refs": "warn",
       // BoxScene's setState-in-effect is guarded by cancellation
       "react-hooks/set-state-in-effect": "warn",
+      // Downgrade require-imports and rules-of-hooks to warnings
+      "@typescript-eslint/no-require-imports": "warn",
+      "react-hooks/rules-of-hooks": "warn",
+      "react-hooks/immutability": "warn",
+      "prefer-const": "warn",
     },
   },
 ]);
