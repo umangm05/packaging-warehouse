@@ -5,6 +5,7 @@ import {
 } from '@/lib/designerTypes';
 import { colorToCss } from '@/lib/colorUtils';
 import { PT_TO_MM } from '@/lib/fonts';
+import { buildFilterString, applyBgRemoval } from '@/lib/imageFilters';
 
 export interface RasterExportOptions {
   widthMm: number;
@@ -201,6 +202,30 @@ async function renderImageRaster(
       const dw = obj.width * scale;
       const dh = obj.height * scale;
 
+      ctx.save();
+
+      // Apply CSS filter adjustments (blur, brightness, contrast, saturate)
+      const filterStr = buildFilterString(obj.adjustments);
+      if (filterStr !== 'none') {
+        ctx.filter = filterStr;
+      }
+
+      // Apply flip via transform
+      if (obj.adjustments.flipH || obj.adjustments.flipV) {
+        const sx = obj.adjustments.flipH ? -1 : 1;
+        const sy = obj.adjustments.flipV ? -1 : 1;
+        ctx.translate(dx + dw / 2, dy + dh / 2);
+        ctx.scale(sx, sy);
+        ctx.translate(-(dx + dw / 2), -(dy + dh / 2));
+      }
+
+      // Crop region
+      const crop = obj.crop;
+      const sx = crop ? crop.x : 0;
+      const sy = crop ? crop.y : 0;
+      const sw = crop ? crop.width : img.width;
+      const sh = crop ? crop.height : img.height;
+
       if (obj.maskType === 'ellipse') {
         ctx.save();
         ctx.beginPath();
@@ -209,23 +234,22 @@ async function renderImageRaster(
       }
 
       if (obj.imageFit === 'stretch') {
-        ctx.drawImage(img, dx, dy, dw, dh);
-      } else if (obj.imageFit === 'cover') {
-        // Cover: scale to fill, crop overflow
-        const imgAspect = img.width / img.height;
-        const boxAspect = dw / dh;
-        let sx = 0, sy = 0, sw = img.width, sh = img.height;
-        if (imgAspect > boxAspect) {
-          sw = img.height * boxAspect;
-          sx = (img.width - sw) / 2;
-        } else {
-          sh = img.width / boxAspect;
-          sy = (img.height - sh) / 2;
-        }
         ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+      } else if (obj.imageFit === 'cover') {
+        const imgAspect = sw / sh;
+        const boxAspect = dw / dh;
+        let cropX = 0, cropY = 0, cropW = sw, cropH = sh;
+        if (imgAspect > boxAspect) {
+          cropW = sh * boxAspect;
+          cropX = (sw - cropW) / 2;
+        } else {
+          cropH = sw / boxAspect;
+          cropY = (sh - cropH) / 2;
+        }
+        ctx.drawImage(img, sx + cropX, sy + cropY, cropW, cropH, dx, dy, dw, dh);
       } else {
         // Contain: fit within box
-        const imgAspect = img.width / img.height;
+        const imgAspect = sw / sh;
         const boxAspect = dw / dh;
         let dw2 = dw, dh2 = dh;
         if (imgAspect > boxAspect) {
@@ -235,12 +259,26 @@ async function renderImageRaster(
         }
         const dx2 = dx + (dw - dw2) / 2;
         const dy2 = dy + (dh - dh2) / 2;
-        ctx.drawImage(img, dx2, dy2, dw2, dh2);
+        ctx.drawImage(img, sx, sy, sw, sh, dx2, dy2, dw2, dh2);
       }
 
       if (obj.maskType === 'ellipse') {
         ctx.restore();
       }
+
+      // Background removal: post-process pixels
+      if (obj.adjustments.bgRemoval && obj.adjustments.bgRemoval.tolerance >= 0) {
+        const bg = obj.adjustments.bgRemoval;
+        try {
+          const imageData = ctx.getImageData(Math.floor(dx), Math.floor(dy), Math.floor(dw), Math.floor(dh));
+          applyBgRemoval(imageData.data, { r: bg.r, g: bg.g, b: bg.b }, bg.tolerance);
+          ctx.putImageData(imageData, Math.floor(dx), Math.floor(dy));
+        } catch {
+          // getImageData may fail for tainted canvas (SVG data URL) — silently skip bg removal
+        }
+      }
+
+      ctx.restore();
       resolve();
     };
     img.onerror = () => resolve();

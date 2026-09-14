@@ -4,6 +4,10 @@ import { useDesignerStore } from "@/store/designer";
 import {
   type DesignObject,
   type Fill,
+  type ImageAdjustments,
+  type ImageFit,
+  type MaskType,
+  DEFAULT_IMAGE_ADJUSTMENTS,
   getObjectBounds,
   OPEN_LICENSED_FONTS,
 } from "@/lib/designerTypes";
@@ -17,6 +21,7 @@ import {
   validateFile,
   type ValidationResult,
 } from "@/lib/fileValidation";
+import { buildFilterString, buildFlipTransform } from "@/lib/imageFilters";
 
 const FIT_PADDING = 40;
 const HANDLE_SIZE = 6;
@@ -62,6 +67,8 @@ export function CanvasStage({
   const clearSelection = useDesignerStore((s) => s.clearSelection);
   const activeTool = useDesignerStore((s) => s.activeTool);
   const setActiveTool = useDesignerStore((s) => s.setActiveTool);
+  const cropMode = useDesignerStore((s) => s.cropMode);
+  const setCropMode = useDesignerStore((s) => s.setCropMode);
   const addObject = useDesignerStore((s) => s.addObject);
   const moveSelected = useDesignerStore((s) => s.moveSelected);
   const updateObject = useDesignerStore((s) => s.updateObject);
@@ -266,6 +273,7 @@ export function CanvasStage({
         naturalWidth: pendingImage.naturalWidth,
         naturalHeight: pendingImage.naturalHeight,
         crop: null,
+        adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS },
       } as any);
       setPendingImage(null);
       // Stay in select tool so user can immediately transform
@@ -976,6 +984,13 @@ export function CanvasStage({
             return <SelectionHandles key={id} obj={obj} svgRef={svgRef} effectiveZoomRef={effectiveZoomRef} />;
           })}
 
+          {/* Crop overlay — when cropMode active on a selected image with crop */}
+          {cropMode && selectedIds[0] && (() => {
+            const found = objects.find((o) => o.id === selectedIds[0] && o.type === "image");
+            if (!found || found.type !== "image" || !found.crop) return null;
+            return <CropOverlay key={`crop-${found.id}`} obj={found as Extract<DesignObject, { type: "image" }> & { crop: { x: number; y: number; width: number; height: number } }} svgRef={svgRef} effectiveZoomRef={effectiveZoomRef} screenToMm={screenToMm} />;
+          })()}
+
           {/* Crosshair */}
           {mouseMm &&
             mouseMm.x >= 0 &&
@@ -1253,6 +1268,14 @@ function ObjectRenderer({ obj }: { obj: DesignObject }) {
       const clipId = `clip-${obj.id}`;
       const needsClip = obj.maskType === "rect" || obj.maskType === "ellipse";
 
+      // Build filter attribute from adjustments
+      const filterAttr = buildFilterString(obj.adjustments);
+      const hasFilter = filterAttr !== "none";
+
+      // Flip transform (applied in addition to rotation)
+      const flipTransform = buildFlipTransform(obj.adjustments);
+      const baseTransform = obj.rotation ? `rotate(${obj.rotation})` : undefined;
+
       return (
         <g>
           {needsClip && (
@@ -1284,9 +1307,8 @@ function ObjectRenderer({ obj }: { obj: DesignObject }) {
             href={obj.src}
             preserveAspectRatio={preserveAspectRatio}
             clipPath={needsClip ? `url(#${clipId})` : undefined}
-            // Vector hint: SVG sources render at full resolution regardless of zoom
-            // because the browser re-rasterizes the SVG data URL at each scale.
-            // This is not true DOM inlining, but avoids permanent pixelation.
+            filter={hasFilter ? filterAttr : undefined}
+            transform={[baseTransform, flipTransform].filter(Boolean).join(" ") || undefined}
             style={obj.isSvg ? { shapeRendering: "geometricPrecision" } : undefined}
           />
         </g>
@@ -1510,4 +1532,103 @@ function getCursorForHandle(handle: HandleId): string {
     default:
       return "pointer";
   }
+}
+
+function CropOverlay({
+  obj,
+  svgRef,
+  effectiveZoomRef,
+  screenToMm,
+}: {
+  obj: Extract<DesignObject, { type: "image" }> & { crop: { x: number; y: number; width: number; height: number } };
+  svgRef: React.RefObject<SVGSVGElement | null>;
+  effectiveZoomRef: React.RefObject<number>;
+  screenToMm: (px: number, py: number) => { x: number; y: number };
+}) {
+  const { crop } = obj;
+  if (!crop) return null;
+
+  const displayX = obj.x;
+  const displayY = obj.y;
+  const displayW = obj.width;
+  const displayH = obj.height;
+
+  const imgAspect = obj.naturalWidth / obj.naturalHeight;
+  const boxAspect = displayW / displayH;
+
+  let drawX = displayX, drawY = displayY, drawW = displayW, drawH = displayH;
+  if (obj.imageFit === "contain") {
+    if (imgAspect > boxAspect) {
+      drawH = displayW / imgAspect;
+      drawY = displayY + (displayH - drawH) / 2;
+    } else {
+      drawW = displayH * imgAspect;
+      drawX = displayX + (displayW - drawW) / 2;
+    }
+  } else if (obj.imageFit === "cover") {
+    if (imgAspect > boxAspect) {
+      drawW = displayH * imgAspect;
+      drawX = displayX + (displayW - drawW) / 2;
+    } else {
+      drawH = displayW / imgAspect;
+      drawY = displayY + (displayH - drawH) / 2;
+    }
+  }
+
+  const cropMmX = drawX + (crop.x / obj.naturalWidth) * drawW;
+  const cropMmY = drawY + (crop.y / obj.naturalHeight) * drawH;
+  const cropMmW = (crop.width / obj.naturalWidth) * drawW;
+  const cropMmH = (crop.height / obj.naturalHeight) * drawH;
+
+  const updateObject = useDesignerStore((s) => s.updateObject);
+
+  const makeCropDragHandler = (corner: "nw" | "se") => {
+    return (e: React.MouseEvent) => {
+      e.stopPropagation();
+      const svg = svgRef.current;
+      if (!svg) return;
+
+      const onMove = (ev: MouseEvent) => {
+        const zoom = effectiveZoomRef.current;
+        const rect = svg.getBoundingClientRect();
+        const px = ev.clientX - rect.left;
+        const py = ev.clientY - rect.top;
+        const mmX = (px - useDesignerStore.getState().panX) / zoom;
+        const mmY = (py - useDesignerStore.getState().panY) / zoom;
+
+        const sx = Math.max(0, Math.min(obj.naturalWidth, Math.round(((mmX - drawX) / drawW) * obj.naturalWidth)));
+        const sy = Math.max(0, Math.min(obj.naturalHeight, Math.round(((mmY - drawY) / drawH) * obj.naturalHeight)));
+
+        if (corner === "se") {
+          const sw = Math.max(10, Math.min(obj.naturalWidth - crop.x, sx - crop.x));
+          const sh = Math.max(10, Math.min(obj.naturalHeight - crop.y, sy - crop.y));
+          updateObject(obj.id, { crop: { x: crop.x, y: crop.y, width: sw, height: sh } } as any);
+        } else {
+          const newX = Math.max(0, Math.min(crop.x + crop.width - 10, sx));
+          const newY = Math.max(0, Math.min(crop.y + crop.height - 10, sy));
+          updateObject(obj.id, { crop: { x: newX, y: newY, width: crop.x + crop.width - newX, height: crop.y + crop.height - newY } } as any);
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    };
+  };
+
+  return (
+    <g pointerEvents="all">
+      <rect x={displayX} y={displayY} width={displayW} height={displayH} fill="rgba(0,0,0,0.5)" />
+      <rect x={cropMmX} y={cropMmY} width={cropMmW} height={cropMmH} fill="transparent" stroke="#fbbf24" strokeWidth={1} />
+      <rect x={cropMmX - 3} y={cropMmY - 3} width={6} height={6} fill="#fbbf24" stroke="#000" strokeWidth={0.5} onMouseDown={makeCropDragHandler("nw")} style={{ cursor: "nw-resize" }} />
+      <rect x={cropMmX + cropMmW - 3} y={cropMmY + cropMmH - 3} width={6} height={6} fill="#fbbf24" stroke="#000" strokeWidth={0.5} onMouseDown={makeCropDragHandler("se")} style={{ cursor: "se-resize" }} />
+      <line x1={cropMmX + cropMmW / 3} y1={cropMmY} x2={cropMmX + cropMmW / 3} y2={cropMmY + cropMmH} stroke="rgba(255,255,255,0.3)" strokeWidth={0.3} />
+      <line x1={cropMmX + 2 * cropMmW / 3} y1={cropMmY} x2={cropMmX + 2 * cropMmW / 3} y2={cropMmY + cropMmH} stroke="rgba(255,255,255,0.3)" strokeWidth={0.3} />
+      <line x1={cropMmX} y1={cropMmY + cropMmH / 3} x2={cropMmX + cropMmW} y2={cropMmY + cropMmH / 3} stroke="rgba(255,255,255,0.3)" strokeWidth={0.3} />
+      <line x1={cropMmX} y1={cropMmY + 2 * cropMmH / 3} x2={cropMmX + cropMmW} y2={cropMmY + 2 * cropMmH / 3} stroke="rgba(255,255,255,0.3)" strokeWidth={0.3} />
+    </g>
+  );
 }

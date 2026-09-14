@@ -5,7 +5,9 @@ import {
   type DesignObject,
   type Fill,
   type ImageFit,
+  type ImageAdjustments,
   type MaskType,
+  DEFAULT_IMAGE_ADJUSTMENTS,
   nextId,
 } from "@/lib/designerTypes";
 import { type Unit } from "@/lib/units";
@@ -49,6 +51,10 @@ interface DesignerState {
   // --- active tool ---
   activeTool: "select" | "rect" | "ellipse" | "line" | "polygon" | "text" | "image";
 
+  // --- crop mode ---
+  cropMode: boolean;
+  setCropMode: (on: boolean) => void;
+
   // --- document actions ---
   setCanvasSize: (widthMm: number, heightMm: number) => void;
   setUnit: (unit: Unit) => void;
@@ -80,6 +86,11 @@ interface DesignerState {
   setImageFit: (id: string, fit: ImageFit) => void;
   setImageMask: (id: string, mask: MaskType) => void;
   setImageCrop: (id: string, crop: CropRect | null) => void;
+  setImageAdjustments: (id: string, patch: Partial<ImageAdjustments>) => void;
+  resetImageAdjustments: (id: string) => void;
+  rotateImage90: (id: string, clockwise: boolean) => void;
+  flipImage: (id: string, axis: "h" | "v") => void;
+  removeBackground: (id: string, targetRgb: { r: number; g: number; b: number }, tolerance: number) => void;
 
   // --- transform actions ---
   moveObject: (id: string, dx: number, dy: number) => void;
@@ -173,6 +184,7 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
     interactionSnapshot: null,
 
     activeTool: "select",
+    cropMode: false,
 
     setCanvasSize: (widthMm, heightMm) =>
       set({ widthMm: Math.max(1, widthMm), heightMm: Math.max(1, heightMm) }),
@@ -189,6 +201,7 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
     fit: () => set({ zoom: "fit" }),
 
     setActiveTool: (activeTool) => set({ activeTool }),
+    setCropMode: (cropMode) => set({ cropMode }),
 
     addObject: (obj) => {
       const id = nextId(obj.type);
@@ -373,6 +386,55 @@ export const useDesignerStore = create<DesignerState>((set, get) => {
       commit((s) => ({
         objects: s.objects.map((o) =>
           o.id === id ? ({ ...o, crop } as DesignObject) : o
+        ),
+      })),
+
+    setImageAdjustments: (id, patch) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id && o.type === "image" ? ({ ...o, adjustments: { ...o.adjustments, ...patch } } as DesignObject) : o
+        ),
+      })),
+
+    resetImageAdjustments: (id) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id && o.type === "image" ? ({ ...o, adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS } } as DesignObject) : o
+        ),
+      })),
+
+    rotateImage90: (id, clockwise) =>
+      commit((s) => ({
+        objects: s.objects.map((o) => {
+          if (o.id !== id || o.type !== "image") return o;
+          const newAdj = { ...o.adjustments };
+          // Swap flipH/flipV depending on rotation direction to maintain visual orientation
+          if (clockwise) {
+            const tmp = newAdj.flipH;
+            newAdj.flipH = newAdj.flipV;
+            newAdj.flipV = tmp;
+          } else {
+            const tmp = newAdj.flipH;
+            newAdj.flipH = newAdj.flipV;
+            newAdj.flipV = tmp;
+          }
+          return { ...o, rotation: (o.rotation + (clockwise ? 90 : -90)) % 360, adjustments: newAdj } as DesignObject;
+        }),
+      })),
+
+    flipImage: (id, axis) =>
+      commit((s) => ({
+        objects: s.objects.map((o) => {
+          if (o.id !== id || o.type !== "image") return o;
+          if (axis === "h") return { ...o, adjustments: { ...o.adjustments, flipH: !o.adjustments.flipH } } as DesignObject;
+          return { ...o, adjustments: { ...o.adjustments, flipV: !o.adjustments.flipV } } as DesignObject;
+        }),
+      })),
+
+    removeBackground: (id, targetRgb, tolerance) =>
+      commit((s) => ({
+        objects: s.objects.map((o) =>
+          o.id === id && o.type === "image" ? ({ ...o, adjustments: { ...o.adjustments, bgRemoval: { ...targetRgb, tolerance } } } as DesignObject) : o
         ),
       })),
 

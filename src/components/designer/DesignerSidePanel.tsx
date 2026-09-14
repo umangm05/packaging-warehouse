@@ -2,7 +2,7 @@
 
 import { useDesignerStore } from "@/store/designer";
 import { formatUnit, fromMm, toMm, UNIT_OPTIONS } from "@/lib/units";
-import { type DesignObject, type Fill, getObjectBounds, OPEN_LICENSED_FONTS } from "@/lib/designerTypes";
+import { type DesignObject, type Fill, getObjectBounds, type ImageAdjustments, DEFAULT_IMAGE_ADJUSTMENTS, OPEN_LICENSED_FONTS } from "@/lib/designerTypes";
 import { colorToCss, formatColorForMode, parseColor } from "@/lib/colorUtils";
 import { useState } from "react";
 import {
@@ -630,6 +630,132 @@ function PropertiesPanel({
                 {obj.isSvg && <span className="ml-1 text-amber-400">SVG</span>}
               </div>
             </div>
+            <div className="flex items-center gap-2 mt-1">
+              <label className="w-12 text-neutral-400">Crop</label>
+              <button
+                onClick={() => {
+                  const cropMode = !useDesignerStore.getState().cropMode;
+                  useDesignerStore.getState().setCropMode(cropMode);
+                  if (cropMode) {
+                    // Initialize crop to full image
+                    updateObject(obj.id, { crop: { x: 0, y: 0, width: obj.naturalWidth, height: obj.naturalHeight } } as any);
+                  }
+                }}
+                className={`flex-1 rounded px-2 py-1 text-xs ${obj.crop ? 'bg-amber-500 text-neutral-900' : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'}`}
+                title="Toggle crop mode"
+              >
+                {obj.crop ? `Crop: ${Math.round(obj.crop.width)}×${Math.round(obj.crop.height)}` : 'Set Crop'}
+              </button>
+              {obj.crop && (
+                <button
+                  onClick={() => updateObject(obj.id, { crop: null } as any)}
+                  className="rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  title="Clear crop"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
+            {/* Image editing: adjustments */}
+            <div className="flex flex-col gap-2 mt-2">
+              <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Adjustments</div>
+              <AdjustmentSlider
+                label="Brightness"
+                value={obj.adjustments.brightness}
+                min={-100} max={100}
+                onChange={(v) => updateObject(obj.id, { adjustments: { ...obj.adjustments, brightness: v } } as any)}
+              />
+              <AdjustmentSlider
+                label="Contrast"
+                value={obj.adjustments.contrast}
+                min={-100} max={100}
+                onChange={(v) => updateObject(obj.id, { adjustments: { ...obj.adjustments, contrast: v } } as any)}
+              />
+              <AdjustmentSlider
+                label="Saturation"
+                value={obj.adjustments.saturation}
+                min={-100} max={100}
+                onChange={(v) => updateObject(obj.id, { adjustments: { ...obj.adjustments, saturation: v } } as any)}
+              />
+              <AdjustmentSlider
+                label="Blur"
+                value={obj.adjustments.blur}
+                min={0} max={10} step={0.5}
+                onChange={(v) => updateObject(obj.id, { adjustments: { ...obj.adjustments, blur: v } } as any)}
+              />
+              <div className="flex gap-1 mt-1">
+                <button
+                  onClick={() => updateObject(obj.id, { adjustments: { ...obj.adjustments, flipH: !obj.adjustments.flipH } } as any)}
+                  className={`flex-1 rounded px-2 py-1 text-xs ${obj.adjustments.flipH ? 'bg-amber-500 text-neutral-900' : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'}`}
+                  title="Flip horizontal"
+                >
+                  ↔ Flip H
+                </button>
+                <button
+                  onClick={() => updateObject(obj.id, { adjustments: { ...obj.adjustments, flipV: !obj.adjustments.flipV } } as any)}
+                  className={`flex-1 rounded px-2 py-1 text-xs ${obj.adjustments.flipV ? 'bg-amber-500 text-neutral-900' : 'bg-neutral-700 text-neutral-200 hover:bg-neutral-600'}`}
+                  title="Flip vertical"
+                >
+                  ↕ Flip V
+                </button>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => updateObject(obj.id, { rotation: (obj.rotation + 90) % 360 } as any)}
+                  className="flex-1 rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  title="Rotate 90° CW"
+                >
+                  ⟳ 90°
+                </button>
+                <button
+                  onClick={() => updateObject(obj.id, { rotation: (obj.rotation - 90 + 360) % 360 } as any)}
+                  className="flex-1 rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  title="Rotate 90° CCW"
+                >
+                  ⟲ 90°
+                </button>
+                <button
+                  onClick={() => updateObject(obj.id, { adjustments: { ...DEFAULT_IMAGE_ADJUSTMENTS } } as any)}
+                  className="flex-1 rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  title="Reset all adjustments"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
+
+            {/* Background removal */}
+            <div className="flex flex-col gap-2 mt-2">
+              <div className="text-[11px] font-semibold text-neutral-400 uppercase tracking-wider">Background Removal</div>
+              <div className="flex items-center gap-2">
+                <label className="w-12 text-neutral-400">Color</label>
+                <input
+                  type="color"
+                  value={obj.adjustments.bgRemoval ? rgbToHex(obj.adjustments.bgRemoval.r, obj.adjustments.bgRemoval.g, obj.adjustments.bgRemoval.b) : '#ffffff'}
+                  onChange={(e) => {
+                    const { r, g, b } = hexToRgb(e.target.value);
+                    updateObject(obj.id, { adjustments: { ...obj.adjustments, bgRemoval: { r, g, b, tolerance: obj.adjustments.bgRemoval?.tolerance ?? 30 } } } as any);
+                  }}
+                  className="h-7 w-7 cursor-pointer rounded border border-neutral-700 bg-transparent"
+                />
+                <button
+                  onClick={() => updateObject(obj.id, { adjustments: { ...obj.adjustments, bgRemoval: null } } as any)}
+                  className="rounded bg-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-600"
+                  title="Disable background removal"
+                >
+                  Off
+                </button>
+              </div>
+              {obj.adjustments.bgRemoval && (
+                <AdjustmentSlider
+                  label="Tolerance"
+                  value={obj.adjustments.bgRemoval.tolerance}
+                  min={0} max={100}
+                  onChange={(v) => updateObject(obj.id, { adjustments: { ...obj.adjustments, bgRemoval: obj.adjustments.bgRemoval ? { ...obj.adjustments.bgRemoval, tolerance: v } : null } } as any)}
+                />
+              )}
+            </div>
           </>
         )}
 
@@ -816,4 +942,49 @@ function PropertiesPanel({
       </div>
     </section>
   );
+}
+
+function AdjustmentSlider({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <label className="w-12 text-neutral-400">{label}</label>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="flex-1"
+      />
+      <span className="w-10 text-right font-mono text-[10px] text-neutral-400">
+        {value}
+      </span>
+    </div>
+  );
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const toHex = (n: number) => Math.round(n).toString(16).padStart(2, "0");
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+}
+
+function hexToRgb(hex: string): { r: number; g: number; b: number } {
+  const h = hex.replace(/^#/, "");
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
 }

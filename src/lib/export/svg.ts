@@ -8,6 +8,7 @@ import {
 import { colorToCss } from '@/lib/colorUtils';
 import { PT_TO_MM } from '@/lib/fonts';
 import { textToSvgPathData, loadFont } from './textPaths';
+import { buildFilterString, buildFlipTransform } from '@/lib/imageFilters';
 
 export interface SvgExportOptions {
   widthMm: number;
@@ -116,7 +117,23 @@ export async function exportSvg(opts: SvgExportOptions): Promise<string> {
             : obj.imageFit === 'cover'
               ? 'xMidYMid slice'
               : 'xMidYMid meet';
-        body += `<image x="${obj.x.toFixed(3)}" y="${obj.y.toFixed(3)}" width="${obj.width.toFixed(3)}" height="${obj.height.toFixed(3)}" href="${obj.src}" preserveAspectRatio="${preserveAspectRatio}"/>`;
+
+        const filterAttr = buildFilterString(obj.adjustments);
+        const hasFilter = filterAttr !== 'none';
+        const flipTransform = buildFlipTransform(obj.adjustments);
+
+        // Build transform for SVG: rotate around center + flip
+        let transformAttr = '';
+        if (obj.rotation || flipTransform) {
+          const b = getObjectBounds(obj);
+          const cx = b.x + b.width / 2;
+          const cy = b.y + b.height / 2;
+          const parts = [`rotate(${obj.rotation} ${cx.toFixed(3)} ${cy.toFixed(3)})`];
+          if (flipTransform) parts.push(`translate(${obj.x} ${obj.y}) ${flipTransform} translate(${-obj.x} ${-obj.y})`);
+          transformAttr = ` transform="${parts.join(' ')}"`;
+        }
+
+        body += `<image x="${obj.x.toFixed(3)}" y="${obj.y.toFixed(3)}" width="${obj.width.toFixed(3)}" height="${obj.height.toFixed(3)}" href="${obj.src}" preserveAspectRatio="${preserveAspectRatio}"${hasFilter ? ` filter="${filterAttr}"` : ''}${transformAttr}/>`;
         break;
       }
     }

@@ -93,6 +93,7 @@ export type DesignObject =
       naturalHeight: number;
       /** Crop rectangle in source-pixel coords (null = full image). */
       crop: { x: number; y: number; width: number; height: number } | null;
+      adjustments: ImageAdjustments;
     });
 
 /** How an image fits within its bounding box when aspect ratios differ. */
@@ -100,6 +101,26 @@ export type ImageFit = "contain" | "cover" | "stretch";
 
 /** Clipping mask shape applied to an image. */
 export type MaskType = "none" | "rect" | "ellipse";
+
+export interface ImageAdjustments {
+  brightness: number; // -100..100, 0 = unchanged
+  contrast: number; // -100..100, 0 = unchanged
+  saturation: number; // -100..100, 0 = unchanged
+  blur: number; // 0..10 (radius in px at 300 DPI equivalent)
+  flipH: boolean;
+  flipV: boolean;
+  bgRemoval: { r: number; g: number; b: number; tolerance: number } | null;
+}
+
+export const DEFAULT_IMAGE_ADJUSTMENTS: ImageAdjustments = {
+  brightness: 0,
+  contrast: 0,
+  saturation: 0,
+  blur: 0,
+  flipH: false,
+  flipV: false,
+  bgRemoval: null,
+};
 
 /** Curated open-licence font list for the vector designer. All are Google Fonts
  *  (SIL Open Font License) — no unlicensed uploads. */

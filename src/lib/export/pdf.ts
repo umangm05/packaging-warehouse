@@ -6,6 +6,7 @@ import {
 } from '@/lib/designerTypes';
 import { PT_TO_MM } from '@/lib/fonts';
 import { textToSvgPathData, loadFont } from './textPaths';
+import { buildFilterString, applyBgRemoval } from '@/lib/imageFilters';
 
 /** mm → PDF points (72dpi) */
 const MM_TO_PT = 72 / 25.4;
@@ -155,8 +156,77 @@ async function drawImage(page: any, obj: any, pdfDoc: PDFDocument, heightMm: num
       const response = await fetch(obj.src);
       buffer = await response.arrayBuffer();
     }
-    const isPng = obj.src.startsWith('image/png') || obj.src.includes('png');
-    const img = isPng ? await pdfDoc.embedPng(buffer) : await pdfDoc.embedJpg(buffer);
+
+    // Bake adjustments via offscreen canvas if any are active
+    const hasAdjustments = obj.adjustments && (
+      obj.adjustments.brightness !== 0 ||
+      obj.adjustments.contrast !== 0 ||
+      obj.adjustments.saturation !== 0 ||
+      obj.adjustments.blur > 0 ||
+      obj.adjustments.flipH ||
+      obj.adjustments.flipV ||
+      obj.adjustments.bgRemoval
+    );
+
+    let finalBuffer = buffer;
+    let isPng = obj.src.startsWith('image/png') || obj.src.includes('png');
+
+    if (hasAdjustments) {
+      // Decode image
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = reject;
+        img.src = obj.src;
+      });
+
+      // Apply crop
+      const crop = obj.crop;
+      const sx = crop ? crop.x : 0;
+      const sy = crop ? crop.y : 0;
+      const sw = crop ? crop.width : img.width;
+      const sh = crop ? crop.height : img.height;
+
+      const canvas = document.createElement('canvas');
+      canvas.width = sw;
+      canvas.height = sh;
+      const ctx = canvas.getContext('2d')!;
+
+      // Apply filter
+      const filterStr = buildFilterString(obj.adjustments);
+      if (filterStr !== 'none') ctx.filter = filterStr;
+
+      // Apply flip
+      if (obj.adjustments.flipH || obj.adjustments.flipV) {
+        ctx.save();
+        ctx.translate(canvas.width / 2, canvas.height / 2);
+        ctx.scale(obj.adjustments.flipH ? -1 : 1, obj.adjustments.flipV ? -1 : 1);
+        ctx.translate(-canvas.width / 2, -canvas.height / 2);
+      }
+
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+
+      if (obj.adjustments.flipH || obj.adjustments.flipV) {
+        ctx.restore();
+      }
+
+      // Background removal
+      if (obj.adjustments.bgRemoval && obj.adjustments.bgRemoval.tolerance >= 0) {
+        const bg = obj.adjustments.bgRemoval;
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        applyBgRemoval(imageData.data, { r: bg.r, g: bg.g, b: bg.b }, bg.tolerance);
+        ctx.putImageData(imageData, 0, 0);
+      }
+
+      // Convert to PNG buffer
+      const blob: Blob = await new Promise((resolve, reject) => {
+        canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png');
+      });
+      finalBuffer = await blob.arrayBuffer();
+      isPng = true;
+    }
+
+    const img = isPng ? await pdfDoc.embedPng(finalBuffer) : await pdfDoc.embedJpg(finalBuffer);
     page.drawImage(img, {
       x: obj.x * MM_TO_PT,
       y: (heightMm - obj.y - obj.height) * MM_TO_PT,
