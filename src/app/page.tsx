@@ -12,8 +12,8 @@ import {
   drawFrontCanvas,
   generatePDF,
   makeFilename,
-} from "@/lib/export";
-import type { ExportFormat, PDFOptions, PNGBackground, PNGOptions } from "@/lib/export";
+} from "@/lib/boxExport";
+import type { ExportFormat, PDFOptions, PNGBackground, PNGOptions } from "@/lib/boxExport";
 import { useDimInput } from "@/hooks/useDimInput";
 import { DIM_LIMITS, type DimKey } from "@/lib/dimValidation";
 
